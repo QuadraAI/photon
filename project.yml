@@ -1,0 +1,201 @@
+# Photon — XcodeGen project definition.
+#
+# Photon.xcodeproj is a build artifact: it is gitignored and regenerated with
+# `xcodegen generate`. Never edit the project in Xcode's UI — the change will be
+# lost on the next generate. Put it here instead.
+#
+# Single multiplatform target (macOS + iPadOS). Swift has no `#if os(iPadOS)`,
+# so iPad code lives behind `#if os(iOS)`.
+
+name: Photon
+
+options:
+  bundleIdPrefix: com.quadra
+  developmentLanguage: en
+  createIntermediateGroups: true
+  groupSortPosition: top
+  # Keep placeholder folders such as App/Utilities and Tests/Integration visible
+  # in the navigator instead of silently dropping them while they are empty.
+  generateEmptyDirectories: true
+  deploymentTarget:
+    macOS: "27.0"
+    iOS: "27.0"
+
+settings:
+  base:
+    # SWIFT_VERSION is the *language mode*, not the compiler version, and is
+    # unrelated to the toolchain (Xcode 27 ships Swift 6.4). The compiler only
+    # accepts 4, 4.2, 5 and 6 — `-swift-version 6.4` is rejected outright — so
+    # "6.0" is the newest mode that exists and 6.4 features (typed `throws`,
+    # `nonisolated` on types, approachable concurrency) are all available.
+    # Mode 6 also implies SWIFT_STRICT_CONCURRENCY = complete.
+    SWIFT_VERSION: "6.0"
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    # UI types are main-actor by default. Pure data and services opt out with
+    # `nonisolated` — see App/Models and App/Services.
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+    STRING_CATALOG_GENERATE_SYMBOLS: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+
+    # Signing.
+    #
+    # XcodeGen's `application_iOS` preset injects CODE_SIGN_IDENTITY =
+    # "iPhone Developer". That value is invalid for the macOS SDK, and with
+    # Automatic signing it makes even a local macOS build fail with "requires a
+    # development team". The preset writes to the *target*, so the override has
+    # to be repeated on every target below — a project-level value is shadowed.
+    #
+    # Ad-hoc ("-") is what Xcode's own macOS template resolves to with no team,
+    # and it still applies the App Sandbox entitlements. Deploying to a physical
+    # iPad needs a real identity: set DEVELOPMENT_TEAM and change the
+    # `[sdk=iphoneos*]` value to "Apple Development".
+    #
+    # Do NOT set CODE_SIGN_STYLE: XcodeGen mirrors it into a
+    # `ProvisioningStyle = Automatic` target attribute, which triggers Xcode's
+    # provisioning preflight. Xcode's implicit default is what we want.
+    CODE_SIGN_IDENTITY: "-"
+    "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Development"
+
+targets:
+  Photon:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    deploymentTarget:
+      iOS: "27.0"
+      macOS: "27.0"
+    sources:
+      - path: App
+      - path: Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quadra.Photon
+        PRODUCT_NAME: Photon
+        GENERATE_INFOPLIST_FILE: YES
+        # Required for the `#Preview` macros in Sources/App/Views.
+        ENABLE_PREVIEWS: YES
+
+        # Shadows the preset's "iPhone Developer" — see the note above.
+        CODE_SIGN_IDENTITY: "-"
+        "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Development"
+
+        # Scene and launch metadata. Only the iphone SDKs read these, so they
+        # are scoped rather than applied to macOS.
+        "INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphone*]": YES
+        "INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphone*]": YES
+        "INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphone*]": YES
+        "INFOPLIST_KEY_UIStatusBarStyle[sdk=iphone*]": UIStatusBarStyleDefault
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+
+        # App Sandbox. Xcode derives com.apple.security.app-sandbox and
+        # com.apple.security.files.user-selected.read-write from these two
+        # settings, so no .entitlements file is needed.
+        #
+        # read-write (not read-only) is what lets Photon reopen a user-selected
+        # folder later, and it is why folder access is persisted as a
+        # security-scoped bookmark rather than a plain path.
+        ENABLE_APP_SANDBOX: YES
+        ENABLE_USER_SELECTED_FILES: readwrite
+
+        # iPadOS + macOS only. TARGETED_DEVICE_FAMILY 2 is iPad; dropping 1 and 7
+        # keeps iPhone and visionOS out of the destination list.
+        TARGETED_DEVICE_FAMILY: "2"
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator macosx"
+
+  PhotonTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS, macOS]
+    deploymentTarget:
+      iOS: "27.0"
+      macOS: "27.0"
+    sources:
+      # Narrowed from `Tests` so the UI tests in Tests/UI do not also compile
+      # into this bundle.
+      - path: Tests/Unit
+      - path: Tests/Integration
+    dependencies:
+      - target: Photon
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quadra.PhotonTests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "2"
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator macosx"
+
+        # Shadows the preset's "iPhone Developer" — see the note above.
+        CODE_SIGN_IDENTITY: "-"
+        "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Development"
+
+        # XcodeGen's default TEST_HOST assumes the iOS bundle layout
+        # (`Photon.app/Photon`). A macOS bundle keeps its executable in
+        # Contents/MacOS, so the path has to be specialised per SDK or the
+        # test host cannot be found on macOS.
+        "TEST_HOST[sdk=macosx*]": "$(BUILT_PRODUCTS_DIR)/Photon.app/Contents/MacOS/Photon"
+        "TEST_HOST[sdk=iphone*]": "$(BUILT_PRODUCTS_DIR)/Photon.app/Photon"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+  PhotonUITests:
+    # UI tests drive the app from a separate process, so they use XCTest —
+    # XCUITest has no Swift Testing support.
+    type: bundle.ui-testing
+    supportedDestinations: [iOS, macOS]
+    deploymentTarget:
+      iOS: "27.0"
+      macOS: "27.0"
+    sources:
+      - path: Tests/UI
+      # The photo fixtures stay at a plain filesystem path and are deliberately
+      # NOT built into the bundle: the open panel treats an app or test bundle as
+      # a single file and will not navigate into one, so a bundled copy would be
+      # unreachable. `buildPhase: none` keeps them visible in the navigator.
+      - path: Tests/Photos
+        type: folder
+        buildPhase: none
+    dependencies:
+      - target: Photon
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quadra.PhotonUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Photon
+        TARGETED_DEVICE_FAMILY: "2"
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator macosx"
+
+        # Shadows the preset's "iPhone Developer" — see the note above.
+        CODE_SIGN_IDENTITY: "-"
+        "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Development"
+
+        # XcodeGen's `bundle.ui-testing` preset sets BUNDLE_LOADER to
+        # `$(TEST_HOST)`. A UI test bundle is not loaded into the app, so both
+        # are cleared rather than left to expand to something surprising.
+        TEST_HOST: ""
+        BUNDLE_LOADER: ""
+
+schemes:
+  Photon:
+    build:
+      targets:
+        Photon: all
+        PhotonTests: [test]
+        PhotonUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - PhotonTests
+        - PhotonUITests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

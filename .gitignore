@@ -60,3 +60,15 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# XcodeGen
+#
+# Photon.xcodeproj is generated from project.yml. Run `xcodegen generate`
+# instead of editing the project file by hand.
+Photon.xcodeproj/
+
+# macOS
+.DS_Store
+
+# Local preview renders (regenerate with Xcode Previews)
+.previews/
