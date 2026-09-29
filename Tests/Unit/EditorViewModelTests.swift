@@ -75,6 +75,21 @@ struct EditorViewModelTests {
         #expect(library.scanCount == 2)
     }
 
+    @Test("A cancelled walk is not mistaken for an empty folder")
+    func cancelledScanDoesNotPublish() async {
+        let editor = makeEditor(library: StubPhotoLibrary(photos: [.fixture()], delay: .milliseconds(50)))
+
+        let loading = Task { await editor.load(.fixture()) }
+        // Let the load start, then take the walk away from it.
+        await Task.yield()
+        loading.cancel()
+        await loading.value
+
+        // A cancelled walk reports no photos, so this must not read as an empty
+        // folder.
+        #expect(editor.library == .loading)
+    }
+
     @Test("Loading clears the previous folder's selection, canvas and open tool")
     func loadResetsState() async {
         let editor = makeEditor(library: StubPhotoLibrary(photos: [.fixture()]))

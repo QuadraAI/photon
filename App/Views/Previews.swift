@@ -80,10 +80,12 @@ private struct PreviewPhotoLibrary: PhotoLibraryLoading {
     func photos(in folder: URL) async throws(PhotoLibraryError) -> [PhotoItem] {
         Self.entries.map { entry in
             let name = entry.folder.isEmpty ? entry.name : "\(entry.folder)/\(entry.name)"
+            let type = UTType(filenameExtension: URL(filePath: entry.name).pathExtension)
             return PhotoItem(
                 url: folder.appending(path: name),
                 subfolderPath: entry.folder,
-                contentType: UTType(filenameExtension: URL(filePath: entry.name).pathExtension)
+                // Enough classification to keep the RAW glyph on the NEF above.
+                isRAW: type?.conforms(to: .rawImage) == true
             )
         }
     }

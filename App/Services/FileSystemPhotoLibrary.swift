@@ -23,7 +23,8 @@ actor FileSystemPhotoLibrary: PhotoLibraryLoading {
     /// How often the walk checks for cancellation.
     nonisolated private static let cancellationCheckInterval = 256
 
-    nonisolated private let logger = Logger(subsystem: "com.quadra.Photon", category: "PhotoLibrary")
+    /// One logger, shared with the skip log the walk's error handler calls.
+    nonisolated private static let logger = Logger(subsystem: "com.quadra.Photon", category: "PhotoLibrary")
 
     /// Injectable so a test can prove the cap without writing five thousand
     /// files to disk.
@@ -84,19 +85,17 @@ actor FileSystemPhotoLibrary: PhotoLibraryLoading {
                 return []
             }
 
-            guard let contentType = photoType(url) else { continue }
+            guard let type = photoType(url) else { continue }
             items.append(
                 PhotoItem(
                     url: url,
-                    subfolderPath: relativeFolder(of: url, under: folder),
-                    contentType: contentType
+                    subfolderPath: relativeFolder(of: url, under: root),
+                    isRAW: type.conforms(to: .rawImage)
                 )
             )
 
             if items.count >= maximumPhotoCount {
-                // The logger's message is an autoclosure, so `self` has to be
-                // spelled out inside it.
-                logger.notice("Stopped after \(self.maximumPhotoCount, privacy: .public) photos")
+                Self.logger.notice("Stopped after \(self.maximumPhotoCount, privacy: .public) photos")
                 break
             }
         }
@@ -106,9 +105,8 @@ actor FileSystemPhotoLibrary: PhotoLibraryLoading {
 
     /// The file's image type, or nil when it is a directory or not an image.
     ///
-    /// `contentType` rather than the file extension, so a `.heic` renamed to
-    /// `.txt` is still found and a `.txt` renamed to `.png` is not offered up
-    /// only to fail when opened.
+    /// The system's answer rather than a second list of extensions kept here,
+    /// which means a text file renamed `.png` is listed and fails on decode.
     private func photoType(_ url: URL) -> UTType? {
         guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentTypeKey]),
               values.isDirectory != true,
@@ -119,9 +117,11 @@ actor FileSystemPhotoLibrary: PhotoLibraryLoading {
         return type
     }
 
-    private func relativeFolder(of url: URL, under root: URL) -> String {
+    /// The photo's folder relative to the scanned root, empty for the root.
+    ///
+    /// `base` arrives already trimmed, so this does no path work of its own.
+    private func relativeFolder(of url: URL, under base: String) -> String {
         let parent = trimmedPath(url.deletingLastPathComponent())
-        let base = trimmedPath(root)
         guard parent != base else { return "" }
 
         return parent.hasPrefix(base)
@@ -150,7 +150,6 @@ actor FileSystemPhotoLibrary: PhotoLibraryLoading {
     }
 
     private nonisolated static func logSkipped(_ url: URL, error: any Error) {
-        Logger(subsystem: "com.quadra.Photon", category: "PhotoLibrary")
-            .error("Skipping \(url.path(percentEncoded: false)): \(error.localizedDescription)")
+        logger.error("Skipping \(url.path(percentEncoded: false)): \(error.localizedDescription)")
     }
 }

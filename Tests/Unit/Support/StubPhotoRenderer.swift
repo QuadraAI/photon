@@ -6,7 +6,6 @@
 import CoreGraphics
 import Foundation
 import Synchronization
-import UniformTypeIdentifiers
 
 @testable import Photon
 
@@ -59,11 +58,11 @@ final class StubPhotoRenderer: PhotoRendering, Sendable {
 
 extension PhotoItem {
     /// Fixture used across the editor tests.
-    static func fixture(name: String = "IMG_0001.heic", subfolderPath: String = "") -> PhotoItem {
+    static func fixture(name: String = "IMG_0001.heic", subfolderPath: String = "", isRAW: Bool = false) -> PhotoItem {
         PhotoItem(
             url: URL(filePath: "/tmp/Photos/\(subfolderPath.isEmpty ? "" : subfolderPath + "/")\(name)"),
             subfolderPath: subfolderPath,
-            contentType: UTType(filenameExtension: URL(filePath: name).pathExtension)
+            isRAW: isRAW
         )
     }
 }

@@ -95,6 +95,35 @@ struct FileSystemPhotoLibraryTests {
         #expect(byName["gamma.png"] == "Holiday/Sub")
     }
 
+    @Test("Photos sharing a name are ordered by the folder they came from")
+    func sortsByFolderWhenNamesMatch() async throws {
+        let tree = try PhotoTree()
+        defer { tree.remove() }
+        try tree.addImage("Zulu/IMG_1.png")
+        try tree.addImage("Alpha/IMG_1.png")
+        try tree.addImage("IMG_1.png")
+
+        let photos = try await FileSystemPhotoLibrary().photos(in: tree.root)
+
+        // The name leads, so the three stay together; the folder decides the tie.
+        #expect(photos.map(\.subfolderPath) == ["", "Alpha", "Zulu"])
+    }
+
+    @Test("A camera raw file is marked for the raw pipeline")
+    func marksRawFiles() async throws {
+        let tree = try PhotoTree()
+        defer { tree.remove() }
+        try tree.addImage("shot.png")
+        // The type comes off the name; nothing decodes this.
+        try tree.addText("shot.nef")
+
+        let photos = try await FileSystemPhotoLibrary().photos(in: tree.root)
+
+        let byName = Dictionary(uniqueKeysWithValues: photos.map { ($0.name, $0.isRAW) })
+        #expect(byName["shot.png"] == false)
+        #expect(byName["shot.nef"] == true)
+    }
+
     @Test("A folder that does not exist is reported as unreadable")
     func missingFolderIsUnreadable() async throws {
         let missing = FileManager.default.temporaryDirectory
@@ -126,6 +155,42 @@ struct FileSystemPhotoLibraryTests {
         let photos = try await FileSystemPhotoLibrary(maximumPhotoCount: 3).photos(in: tree.root)
 
         #expect(photos.count == 3)
+    }
+
+    // MARK: - Benchmark
+
+    /// Opt-in, because it writes five thousand files:
+    ///
+    ///     PHOTON_BENCHMARK=1 xcodebuild test -only-testing:PhotonTests/FileSystemPhotoLibraryTests
+    ///
+    /// It reports timings rather than asserting them.
+    @Test(
+        "Reports what a five-thousand-photo tree costs to scan and to filter",
+        .enabled(if: ProcessInfo.processInfo.environment["PHOTON_BENCHMARK"] != nil)
+    )
+    @MainActor
+    func benchmarkLargeTree() async throws {
+        let tree = try PhotoTree()
+        defer { tree.remove() }
+        for folder in 0..<200 {
+            for photo in 0..<25 {
+                try tree.addImage("Trip-\(folder % 37)/Album \(folder)/IMG_\(1_000 + photo).png")
+            }
+        }
+
+        let library = FileSystemPhotoLibrary()
+        let clock = ContinuousClock()
+        let scanStart = clock.now
+        #expect(try await library.photos(in: tree.root).count == 5_000)
+        let scan = scanStart.duration(to: clock.now)
+
+        let editor = EditorViewModel(app: makeAppViewModel(), library: library, renderer: StubPhotoRenderer())
+        await editor.load(AuthorizedFolder(url: tree.root, bookmark: nil))
+        let filterStart = clock.now
+        editor.filter = "IMG_10"
+        let filter = filterStart.duration(to: clock.now)
+
+        print("Photon benchmark — 5,000 photos, 200 subfolders: scan \(scan), filter \(filter), kept \(editor.visiblePhotos.count)")
     }
 }
 

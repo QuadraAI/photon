@@ -37,7 +37,11 @@ final class EditorViewModel {
         case failed(PhotoItem)
     }
 
-    private(set) var library: Library = .loading
+    /// What the media sidebar is showing; ``visiblePhotos`` is derived from it.
+    private(set) var library: Library = .loading {
+        didSet { refreshVisiblePhotos() }
+    }
+
     private(set) var canvas: Canvas = .nothingSelected
     private(set) var selection: PhotoItem?
 
@@ -47,16 +51,11 @@ final class EditorViewModel {
 
     var isSidebarVisible = true
 
-    /// How wide the tool panel is, in points.
+    /// How wide the tool panel is, in points, for this window only.
     ///
     /// The sidebar's width is the split view's; only the panel is still a pane we
     /// place ourselves.
     private(set) var panelWidth = AppLayout.toolPanelWidth
-    ///
-    /// Per window and in memory only: a width is a working preference rather
-    /// than a setting, and the window is maximised anyway.
-
-    /// How wide the open tool panel is, in points.
 
     private(set) var canUndo = false
     private(set) var canRedo = false
@@ -111,18 +110,20 @@ final class EditorViewModel {
         selection = nil
         canvas = .nothingSelected
         openTool = nil
-        // A filter belongs to the list it was typed against.
+        library = .loading
+        // Both assignments empty the sidebar through the observers above, and a
+        // filter belongs to the list it was typed against.
         filter = ""
         clearUndoHistory()
-        library = .loading
 
         do {
             let photos = try await libraryLoader.photos(in: folder.url)
-            // A newer folder may have been requested while this one scanned.
-            guard self.folder?.url == folder.url else { return }
+            // A newer folder may have been requested, and a cancelled walk
+            // reports no photos at all.
+            guard self.folder?.url == folder.url, !Task.isCancelled else { return }
             library = .loaded(photos)
         } catch {
-            guard self.folder?.url == folder.url else { return }
+            guard self.folder?.url == folder.url, !Task.isCancelled else { return }
             library = .failed(error)
         }
     }
@@ -166,23 +167,32 @@ final class EditorViewModel {
     // MARK: - Filtering
 
     /// What the sidebar's filter field contains. Empty shows everything.
-    var filter = ""
+    var filter = "" {
+        didSet { refreshVisiblePhotos() }
+    }
 
     /// The photos the sidebar should list, in order.
     ///
-    /// `localizedStandardContains` so filtering follows the same case- and
-    /// diacritic-insensitive rules as the rest of the system.
-    var visiblePhotos: [PhotoItem] {
-        guard case .loaded(let photos) = library else { return [] }
-        let query = filter.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return photos }
-        return photos.filter { $0.name.localizedStandardContains(query) }
-    }
+    /// Stored: the sidebar reads it three times per body, so computing it would
+    /// re-match every photo three times per keystroke.
+    private(set) var visiblePhotos: [PhotoItem] = []
 
     /// True when a filter is hiding every photo, which is worth saying out loud
     /// rather than showing an empty list.
     var isFilteringToNothing: Bool {
         !filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && visiblePhotos.isEmpty
+    }
+
+    /// Re-derives ``visiblePhotos``; `localizedStandardContains` so the match
+    /// follows the system's case- and diacritic-insensitive rules.
+    private func refreshVisiblePhotos() {
+        guard case .loaded(let photos) = library else {
+            visiblePhotos = []
+            return
+        }
+
+        let query = filter.trimmingCharacters(in: .whitespacesAndNewlines)
+        visiblePhotos = query.isEmpty ? photos : photos.filter { $0.name.localizedStandardContains(query) }
     }
 
     // MARK: - Tools
@@ -238,12 +248,6 @@ final class EditorViewModel {
         undoManager.redo()
         refreshUndoState()
     }
-
-    // MARK: - Resizing
-
-    /// Sets the media sidebar's width, kept inside its range.
-    ///
-
 
     // MARK: - Window
 
