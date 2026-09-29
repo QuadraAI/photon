@@ -195,6 +195,12 @@ nonisolated class EditorUITestCase: XCTestCase, @unchecked Sendable {
         app.descendants(matching: .any)["editor.sidebar.row.\(name)"]
     }
 
+    /// A folder's row in the sidebar's tree.
+    @MainActor
+    func folderRow(_ path: String) -> XCUIElement {
+        app.descendants(matching: .any)["editor.sidebar.folder.\(path)"]
+    }
+
     /// The sidebar's filter field.
     @MainActor
     var sidebarFilter: XCUIElement {

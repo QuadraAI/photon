@@ -16,6 +16,16 @@ nonisolated final class EditorUITests: EditorUITestCase, @unchecked Sendable {
     /// and the sidebar toggle.
     @MainActor
     func testOpeningAFolderShowsItsPhotosAndTheEditorChrome() {
+        // The sidebar lists the folder's folders, so the nested photos appear
+        // when their folder is opened.
+        XCTAssertEqual(sidebarRows.count, 2, "The root's two photos are listed straight away")
+        XCTAssertTrue(
+            folderRow("Subfolder").exists,
+            "The subfolder the fixture's nested photos are in is missing"
+        )
+
+        folderRow("Subfolder").click()
+
         XCTAssertEqual(
             sidebarRows.count,
             4,
@@ -36,12 +46,13 @@ nonisolated final class EditorUITests: EditorUITestCase, @unchecked Sendable {
             "The sidebar header should count the photos, got \(sidebarCount ?? "nothing")"
         )
 
-        // The subfolder is surfaced on the row, not only in a hover tooltip:
-        // two subfolders can hold the same file name.
+        // Which folder a photo came from is the tree's job now, not a label on
+        // every row: two subfolders can hold the same file name.
         XCTAssertTrue(
-            (text("editor.sidebar.row.delta.jpg") ?? "").contains("Subfolder"),
-            "A nested photo's row should say which subfolder it came from, got \(text("editor.sidebar.row.delta.jpg") ?? "nothing")"
+            (text("editor.sidebar.folder.Subfolder") ?? "").contains("Subfolder"),
+            "The folder a nested photo came from should be listed, got \(text("editor.sidebar.folder.Subfolder") ?? "nothing")"
         )
+        XCTAssertEqual(folderRow("Subfolder").isSelected, false, "A folder is not a photo")
 
         XCTAssertFalse(
             app.images["editor.canvas.image"].exists,
@@ -175,6 +186,8 @@ nonisolated final class EditorUITests: EditorUITestCase, @unchecked Sendable {
     /// Picking photos, including one nested two levels down.
     @MainActor
     func testChoosingPhotosRendersThemAndNamesThemInTheToolbar() {
+        folderRow("Subfolder").click()
+
         row("alpha.png").click()
         XCTAssertTrue(
             app.images["editor.canvas.image"].waitForExistence(timeout: 30),

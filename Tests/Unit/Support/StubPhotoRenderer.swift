@@ -15,19 +15,33 @@ final class StubPhotoRenderer: PhotoRendering, Sendable {
     private let failure: Mutex<PhotoRenderError?>
     private let delay: Duration?
     private let requested = Mutex<[URL]>([])
+    private let drafts = Mutex<[URL]>([])
 
-    /// - Parameters:
-    ///   - delay: How long each decode takes. Lets a test hold one render open
-    ///     while a later selection cancels it.
+    /// - Parameter delay: How long the full decode takes, so a test can hold one
+    ///   render open while a later selection cancels it.
     init(image: CGImage? = nil, failure: PhotoRenderError? = nil, delay: Duration? = nil) {
         self.image = Mutex(image ?? Self.makePixel())
         self.failure = Mutex(failure)
         self.delay = delay
     }
 
-    /// URLs asked for, in call order.
+    /// URLs asked for the full decode, in call order.
     var requestedURLs: [URL] {
         requested.withLock { $0 }
+    }
+
+    /// URLs asked for a draft, in call order.
+    var draftURLs: [URL] {
+        drafts.withLock { $0 }
+    }
+
+    func draft(for url: URL, maxPixelSize: Int) async throws(PhotoRenderError) -> CGImage {
+        drafts.withLock { $0.append(url) }
+
+        // A draft is never a failure: it is the picture the file carries, and a
+        // file that carries none still has the picture itself.
+        guard let image = image.withLock({ $0 }) else { throw .unreadable }
+        return image
     }
 
     func preview(for url: URL, maxPixelSize: Int) async throws(PhotoRenderError) -> CGImage {

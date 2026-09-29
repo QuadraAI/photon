@@ -11,11 +11,14 @@ import SwiftUI
 /// keeps a folder of thousands cheap.
 struct MediaSidebar: View {
     @Environment(EditorViewModel.self) private var editor
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// The folders the user has opened, by their path. Kept here rather than in
+    /// the tree, so a filter or another folder does not close them.
+    @State private var expanded: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
-            if case .loaded(let photos) = editor.library, !photos.isEmpty {
+            if editor.foundCount > 0 {
                 filterField
             }
             content
@@ -24,9 +27,9 @@ struct MediaSidebar: View {
 
     // MARK: - Header
 
-    /// A section header inside the list rather than a bar above it, so the
-    /// `List` lines it up with the row content — the selection inset would
-    /// otherwise leave it standing to the left of every row.
+    /// A section header inside the list rather than a bar above it, so the rows
+    /// line up with it. It carries a material because it stays pinned while the
+    /// rows scroll under it.
     private var header: some View {
         HStack(spacing: 6) {
             Text("editor.sidebar.title")
@@ -43,13 +46,16 @@ struct MediaSidebar: View {
             // on the `Text` and the section header's row takes it, leaving the
             // count without an element of its own.
             HStack(spacing: 0) {
-                Text(editor.visiblePhotos.count, format: .number)
+                Text(editor.matches.count, format: .number)
                     .monospacedDigit()
                     .accessibilityIdentifier("editor.sidebar.count")
             }
             .frame(minWidth: AppLayout.sidebarToggleWidth, alignment: .center)
             .padding(.trailing, AppLayout.sidebarCountTrailingInset)
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.bar)
     }
 
     // MARK: - Content
@@ -123,12 +129,18 @@ struct MediaSidebar: View {
         // hand-painted highlight: this is what gives the native rounded
         // selection, the dimmed look when the window is inactive, hover
         // highlighting, and arrow-key navigation for free.
-        List(selection: selectedID) {
+        //
+        // It lists a tree, because a `List` lays out every row it is handed:
+        // folded up, a folder of thousands is a single row.
+        List(selection: selectedPhoto) {
             Section {
-                ForEach(editor.visiblePhotos) { photo in
-                    row(photo)
-                        .tag(photo.id)
-                        .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
+                ForEach(editor.nodes) { node in
+                    switch node {
+                    case .folder(let folder):
+                        FolderRows(expanded: $expanded, folder: folder)
+                    case .photo(let photo):
+                        PhotoRow(photo: photo).listed
+                    }
                 }
             } header: {
                 header
@@ -136,87 +148,26 @@ struct MediaSidebar: View {
         }
         .listStyle(.sidebar)
         // The list's own material is switched off so the sidebar draws one
-        // surface across the filter field, the header and the rows. Left on, the
-        // strip above the list stayed bare and showed the window's white.
+        // surface across the filter field, the header and the rows. Left on,
+        // the strip above the list stayed bare and showed the window's white.
         .scrollContentBackground(.hidden)
         .accessibilityIdentifier("editor.sidebar.list")
     }
 
     /// Selecting is deliberately not a plain assignment: the row is highlighted
     /// on the same frame, and the decode happens behind it.
-    private var selectedID: Binding<URL?> {
+    private var selectedPhoto: Binding<URL?> {
         Binding(
             get: { editor.selection?.id },
             set: { id in
-                guard let id, let photo = editor.visiblePhotos.first(where: { $0.id == id }) else {
-                    return
-                }
+                // A folder's row carries its own URL, and choosing one is not
+                // choosing a photo.
+                guard let id, let photo = editor.photo(withNodeID: id) else { return }
                 editor.beginSelecting(photo)
             }
         )
     }
 
-    private func row(_ photo: PhotoItem) -> some View {
-        let hasSubfolder = !photo.subfolderPath.isEmpty
-        // Past the accessibility sizes there is no room beside the name, so the
-        // subfolder moves under it rather than falling off the row. It is how
-        // two identically named photos are told apart, so losing it would be
-        // information lost, not layout reflowed.
-        let stacks = dynamicTypeSize.isAccessibilitySize
-
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Image(systemName: photo.symbolName)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .frame(width: AppLayout.sidebarGlyphWidth)
-                    .accessibilityHidden(true)
-
-                name(photo)
-                    .layoutPriority(1)
-
-                if hasSubfolder, !stacks {
-                    Spacer(minLength: 6)
-                    subfolder(photo)
-                }
-            }
-
-            if hasSubfolder, stacks {
-                subfolder(photo)
-                    .padding(.leading, AppLayout.sidebarGlyphWidth + 6)
-            }
-        }
-        .tooltip(photo.subfolderPath)
-        // One element per row, so VoiceOver reads "delta.jpg, Subfolder" as a
-        // single item instead of two — and so the identifier below applies to
-        // the row rather than being pushed onto each of its children.
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("editor.sidebar.row.\(photo.name)")
-    }
-
-    /// Name at full strength and extension dimmed, so the extensions line up in
-    /// a column. Two `Text`s rather than one concatenated with `+`, which is
-    /// deprecated, and which would also send the pair through the string catalog
-    /// as a format.
-    private func name(_ photo: PhotoItem) -> some View {
-        HStack(spacing: 0) {
-            Text(photo.baseName)
-            Text(photo.fileExtension)
-                .foregroundStyle(.secondary)
-        }
-        .lineLimit(1)
-        .truncationMode(.middle)
-    }
-
-    /// Shown on the row, not only in the tooltip: a tooltip is undiscoverable,
-    /// and iPadOS has no hover at all.
-    private func subfolder(_ photo: PhotoItem) -> some View {
-        Text(photo.subfolderPath)
-            .font(.caption)
-            .foregroundStyle(.tertiary)
-            .lineLimit(1)
-            .truncationMode(.middle)
-    }
 
     // MARK: - States
 
@@ -242,13 +193,107 @@ struct MediaSidebar: View {
     }
 }
 
-private extension View {
-    /// Attaches a hover tooltip only when there is something worth saying.
-    @ViewBuilder func tooltip(_ text: String) -> some View {
-        if text.isEmpty {
-            self
-        } else {
-            help(text)
+/// A folder's rows: what is inside it, and whether it is open.
+///
+/// A view type rather than a function because it recurses, and Swift cannot infer
+/// the type of a recursive `some View`.
+private struct FolderRows: View {
+    @Binding var expanded: Set<String>
+    let folder: LibraryNode.Folder
+
+    var body: some View {
+        DisclosureGroup(isExpanded: isOpen) {
+            ForEach(folder.children) { child in
+                switch child {
+                case .folder(let subfolder):
+                    FolderRows(expanded: $expanded, folder: subfolder)
+                case .photo(let photo):
+                    PhotoRow(photo: photo).listed
+                }
+            }
+        } label: {
+            label
+                .contentShape(.rect)
+                // The name opens the folder as well as the triangle does.
+                .onTapGesture { isOpen.wrappedValue.toggle() }
         }
+    }
+
+    /// A folder's row: its glyph, its name, and how many photos are in it and
+    /// below it.
+    private var label: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: AppLayout.sidebarGlyphWidth)
+                .accessibilityHidden(true)
+
+            Text(folder.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 6)
+
+            Text(folder.photoCount, format: .number)
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.tertiary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("editor.sidebar.folder.\(folder.path)")
+    }
+
+    private var isOpen: Binding<Bool> {
+        Binding(
+            get: { expanded.contains(folder.path) },
+            set: { open in
+                if open {
+                    expanded.insert(folder.path)
+                } else {
+                    expanded.remove(folder.path)
+                }
+            }
+        )
+    }
+}
+
+/// A photo's row: a glyph for its kind, then its name with the extension dimmed
+/// so the extensions line up in a column.
+private struct PhotoRow: View {
+    let photo: PhotoItem
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: photo.symbolName)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: AppLayout.sidebarGlyphWidth)
+                .accessibilityHidden(true)
+
+            HStack(spacing: 0) {
+                Text(photo.baseName)
+                Text(photo.fileExtension)
+                    .foregroundStyle(.secondary)
+            }
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .layoutPriority(1)
+
+            Spacer(minLength: 0)
+        }
+        // One element per row, so VoiceOver reads the name and its extension as
+        // a single item — and so the identifier below applies to the row rather
+        // than being pushed onto each of its children.
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("editor.sidebar.row.\(photo.name)")
+    }
+}
+
+private extension PhotoRow {
+    /// As the list wants it: selectable, and inset like the folder rows.
+    var listed: some View {
+        tag(photo.id)
+            .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
     }
 }

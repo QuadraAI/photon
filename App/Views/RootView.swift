@@ -23,7 +23,6 @@ struct RootView: View {
         _folder = State(initialValue: FolderViewModel(app: app))
         _editor = State(
             initialValue: EditorViewModel(
-                app: app,
                 library: FileSystemPhotoLibrary(),
                 renderer: ImageIOPhotoRenderer()
             )

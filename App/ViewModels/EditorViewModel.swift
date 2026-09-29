@@ -8,6 +8,50 @@ import Foundation
 import Observation
 import os
 
+/// One row of the media sidebar's list: a folder, or a photo.
+///
+/// A tree, because a `List` lays out every row it is handed: folded up, a folder
+/// of thousands costs one row.
+nonisolated enum LibraryNode: Identifiable, Equatable {
+    case folder(Folder)
+    case photo(PhotoItem)
+
+    /// A folder of the scanned root and what is directly inside it.
+    nonisolated struct Folder: Identifiable, Equatable {
+        /// Path relative to the scanned root, empty for the root itself.
+        let path: String
+
+        /// Photos and folders directly inside it, folders first.
+        let children: [LibraryNode]
+
+        /// How many photos are in it and everything below it.
+        let photoCount: Int
+
+        /// The folder's own URL, which is what its row is selected by.
+        let id: URL
+
+        /// The folder's own name, which is what its row reads.
+        var name: String {
+            String(path.split(separator: "/").last ?? "")
+        }
+    }
+
+    var id: URL {
+        switch self {
+        case .folder(let folder): folder.id
+        case .photo(let photo): photo.url
+        }
+    }
+
+    /// The name its row reads, folder or photo.
+    var name: String {
+        switch self {
+        case .folder(let folder): folder.name
+        case .photo(let photo): photo.name
+        }
+    }
+}
+
 /// Window-scoped view model: the folder's photos, which one is on the canvas,
 /// and which tool panel is open.
 ///
@@ -37,10 +81,8 @@ final class EditorViewModel {
         case failed(PhotoItem)
     }
 
-    /// What the media sidebar is showing; ``visiblePhotos`` is derived from it.
-    private(set) var library: Library = .loading {
-        didSet { refreshVisiblePhotos() }
-    }
+    /// What the media sidebar is showing; ``matches`` is derived from it.
+    private(set) var library: Library = .loading
 
     private(set) var canvas: Canvas = .nothingSelected
     private(set) var selection: PhotoItem?
@@ -65,7 +107,6 @@ final class EditorViewModel {
     private(set) var hasMaximizedWindow = false
 
     private let logger = Logger(subsystem: "com.quadra.Photon", category: "EditorViewModel")
-    private let app: AppViewModel
     private let libraryLoader: PhotoLibraryLoading
     private let renderer: PhotoRendering
 
@@ -79,8 +120,7 @@ final class EditorViewModel {
     /// ``canUndo``/``canRedo`` for the toolbar to react to.
     @ObservationIgnored private let undoManager = UndoManager()
 
-    init(app: AppViewModel, library: PhotoLibraryLoading, renderer: PhotoRendering) {
-        self.app = app
+    init(library: PhotoLibraryLoading, renderer: PhotoRendering) {
         self.libraryLoader = library
         self.renderer = renderer
     }
@@ -110,9 +150,9 @@ final class EditorViewModel {
         selection = nil
         canvas = .nothingSelected
         openTool = nil
+        // A filter belongs to the list it was typed against, and the window
+        // starts over with it. Assigning it is also what re-derives the list.
         library = .loading
-        // Both assignments empty the sidebar through the observers above, and a
-        // filter belongs to the list it was typed against.
         filter = ""
         clearUndoHistory()
 
@@ -126,6 +166,8 @@ final class EditorViewModel {
             guard self.folder?.url == folder.url, !Task.isCancelled else { return }
             library = .failed(error)
         }
+
+        refreshMatches()
     }
 
     // MARK: - Selecting a photo
@@ -143,6 +185,14 @@ final class EditorViewModel {
         clearUndoHistory()
 
         loadTask = Task { [renderer] in
+            // What the file already carries, so the canvas has the picture on it
+            // in about a millisecond instead of after a full decode — 700 ms for
+            // one of a Sony's raw files.
+            if let draft = try? await renderer.draft(for: item.url, maxPixelSize: AppLayout.previewMaxPixelSize) {
+                guard !Task.isCancelled else { return }
+                canvas = .ready(item, draft)
+            }
+
             do {
                 let image = try await renderer.preview(for: item.url, maxPixelSize: AppLayout.previewMaxPixelSize)
                 guard !Task.isCancelled else { return }
@@ -168,31 +218,100 @@ final class EditorViewModel {
 
     /// What the sidebar's filter field contains. Empty shows everything.
     var filter = "" {
-        didSet { refreshVisiblePhotos() }
+        didSet { refreshMatches() }
     }
 
-    /// The photos the sidebar should list, in order.
+    /// How many photos the folder holds, filter or no filter.
     ///
-    /// Stored: the sidebar reads it three times per body, so computing it would
-    /// re-match every photo three times per keystroke.
-    private(set) var visiblePhotos: [PhotoItem] = []
+    /// What the sidebar shows its filter field from: a filter that hides
+    /// everything must not take away the field that clears it.
+    var foundCount: Int {
+        if case .loaded(let photos) = library { return photos.count }
+        return 0
+    }
+
+    /// The photos the filter lets through, in order.
+    private(set) var matches: [PhotoItem] = []
+
+    /// ``matches`` as the sidebar lists them: folders first, each holding its own
+    /// photos and folders.
+    private(set) var nodes: [LibraryNode] = []
 
     /// True when a filter is hiding every photo, which is worth saying out loud
     /// rather than showing an empty list.
     var isFilteringToNothing: Bool {
-        !filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && visiblePhotos.isEmpty
+        !filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && matches.isEmpty
     }
 
-    /// Re-derives ``visiblePhotos``; `localizedStandardContains` so the match
-    /// follows the system's case- and diacritic-insensitive rules.
-    private func refreshVisiblePhotos() {
-        guard case .loaded(let photos) = library else {
-            visiblePhotos = []
-            return
+    /// Re-derives ``matches`` from ``library`` and ``filter``.
+    ///
+    /// `localizedStandardContains` so the match follows the system's case- and
+    /// diacritic-insensitive rules.
+    private func refreshMatches() {
+        let photos: [PhotoItem]
+        switch library {
+        case .loaded(let loaded): photos = loaded
+        case .loading, .failed: photos = []
         }
 
         let query = filter.trimmingCharacters(in: .whitespacesAndNewlines)
-        visiblePhotos = query.isEmpty ? photos : photos.filter { $0.name.localizedStandardContains(query) }
+        matches = query.isEmpty ? photos : photos.filter { $0.name.localizedStandardContains(query) }
+        nodes = Self.tree(of: matches, under: folder?.url)
+    }
+
+    /// The photo a row stands for, or nil for a folder's row.
+    func photo(withNodeID id: URL) -> PhotoItem? {
+        matches.first { $0.id == id }
+    }
+
+    /// Builds the tree the sidebar lists: folders first, then the folder's own
+    /// photos, so one reads as a heading over its pictures. A folder that only
+    /// holds other folders, as a camera's `100MSDCF` dumps do, is just those.
+    private static func tree(of photos: [PhotoItem], under root: URL?) -> [LibraryNode] {
+        guard let root else { return photos.map(LibraryNode.photo) }
+
+        var byFolder: [String: [PhotoItem]] = [:]
+        for photo in photos {
+            byFolder[photo.subfolderPath, default: []].append(photo)
+        }
+
+        // Every folder on the way down to a photo, by the folder above it, so a
+        // photo two folders deep still puts its grandparents in the tree.
+        var subfolders: [String: Set<String>] = [:]
+        for path in byFolder.keys where !path.isEmpty {
+            var parent = ""
+            for component in path.split(separator: "/") {
+                let child = parent.isEmpty ? String(component) : parent + "/" + String(component)
+                subfolders[parent, default: []].insert(child)
+                parent = child
+            }
+        }
+
+        /// The rows inside `path`, and how many photos are in it or below it.
+        func build(_ path: String) -> (rows: [LibraryNode], photos: Int) {
+            var rows: [LibraryNode] = []
+            var count = 0
+
+            for child in (subfolders[path] ?? []).sorted(by: { $0.localizedStandardCompare($1) == .orderedAscending }) {
+                let built = build(child)
+                count += built.photos
+                rows.append(
+                    .folder(
+                        LibraryNode.Folder(
+                            path: child,
+                            children: built.rows,
+                            photoCount: built.photos,
+                            id: root.appending(path: child)
+                        )
+                    )
+                )
+            }
+
+            let own = (byFolder[path] ?? []).map(LibraryNode.photo)
+            return (rows + own, count + own.count)
+        }
+
+        return build("").rows
     }
 
     // MARK: - Tools

@@ -144,19 +144,6 @@ struct FileSystemPhotoLibraryTests {
         #expect(photos.isEmpty)
     }
 
-    @Test("Stops at the cap instead of walking an entire disk")
-    func stopsAtTheCap() async throws {
-        let tree = try PhotoTree()
-        defer { tree.remove() }
-        for index in 0..<6 {
-            try tree.addImage("photo-\(index).png")
-        }
-
-        let photos = try await FileSystemPhotoLibrary(maximumPhotoCount: 3).photos(in: tree.root)
-
-        #expect(photos.count == 3)
-    }
-
     // MARK: - Benchmark
 
     /// Opt-in, because it writes five thousand files:
@@ -184,13 +171,13 @@ struct FileSystemPhotoLibraryTests {
         #expect(try await library.photos(in: tree.root).count == 5_000)
         let scan = scanStart.duration(to: clock.now)
 
-        let editor = EditorViewModel(app: makeAppViewModel(), library: library, renderer: StubPhotoRenderer())
+        let editor = EditorViewModel(library: library, renderer: StubPhotoRenderer())
         await editor.load(AuthorizedFolder(url: tree.root, bookmark: nil))
         let filterStart = clock.now
         editor.filter = "IMG_10"
         let filter = filterStart.duration(to: clock.now)
 
-        print("Photon benchmark — 5,000 photos, 200 subfolders: scan \(scan), filter \(filter), kept \(editor.visiblePhotos.count)")
+        print("Photon benchmark — 5,000 photos, 200 subfolders: scan \(scan), filter \(filter), matched \(editor.matches.count)")
     }
 }
 

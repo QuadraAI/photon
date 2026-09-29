@@ -9,30 +9,11 @@ import os
 
 /// ``PhotoLibraryLoading`` backed by a recursive directory walk.
 actor FileSystemPhotoLibrary: PhotoLibraryLoading {
-    /// A safety valve rather than a real limit.
-    ///
-    /// The user can pick `/`, and enumerating an entire disk while the sidebar
-    /// waits would look like a hang. Hitting the cap stops the walk; it does not
-    /// report an error.
-    ///
-    /// `nonisolated` because the target builds with `SWIFT_DEFAULT_ACTOR_ISOLATION
-    /// = MainActor`, which would otherwise make even a `static let` main-actor
-    /// bound and unusable from inside this actor.
-    nonisolated static let defaultMaximumPhotoCount = 5_000
-
     /// How often the walk checks for cancellation.
     nonisolated private static let cancellationCheckInterval = 256
 
     /// One logger, shared with the skip log the walk's error handler calls.
     nonisolated private static let logger = Logger(subsystem: "com.quadra.Photon", category: "PhotoLibrary")
-
-    /// Injectable so a test can prove the cap without writing five thousand
-    /// files to disk.
-    nonisolated private let maximumPhotoCount: Int
-
-    init(maximumPhotoCount: Int = FileSystemPhotoLibrary.defaultMaximumPhotoCount) {
-        self.maximumPhotoCount = maximumPhotoCount
-    }
 
     func photos(in folder: URL) async throws(PhotoLibraryError) -> [PhotoItem] {
         // The walk itself is synchronous on purpose: `DirectoryEnumerator` is
@@ -76,31 +57,24 @@ actor FileSystemPhotoLibrary: PhotoLibraryLoading {
             throw .unreadable
         }
 
-        var items: [PhotoItem] = []
+        var photos: [PhotoItem] = []
         var visited = 0
 
         for case let url as URL in enumerator {
             visited += 1
-            if visited.isMultiple(of: Self.cancellationCheckInterval), Task.isCancelled {
-                return []
-            }
+            if visited.isMultiple(of: Self.cancellationCheckInterval), Task.isCancelled { return [] }
 
             guard let type = photoType(url) else { continue }
-            items.append(
+            photos.append(
                 PhotoItem(
                     url: url,
                     subfolderPath: relativeFolder(of: url, under: root),
                     isRAW: type.conforms(to: .rawImage)
                 )
             )
-
-            if items.count >= maximumPhotoCount {
-                Self.logger.notice("Stopped after \(self.maximumPhotoCount, privacy: .public) photos")
-                break
-            }
         }
 
-        return items
+        return photos
     }
 
     /// The file's image type, or nil when it is a directory or not an image.
@@ -141,8 +115,8 @@ actor FileSystemPhotoLibrary: PhotoLibraryLoading {
 
     /// `localizedStandardCompare` so "IMG_2" sorts before "IMG_10", and the
     /// folder breaks ties so the order does not depend on the walk.
-    private func sorted(_ items: [PhotoItem]) -> [PhotoItem] {
-        items.sorted { lhs, rhs in
+    private func sorted(_ photos: [PhotoItem]) -> [PhotoItem] {
+        photos.sorted { lhs, rhs in
             let byName = lhs.name.localizedStandardCompare(rhs.name)
             if byName != .orderedSame { return byName == .orderedAscending }
             return lhs.subfolderPath.localizedStandardCompare(rhs.subfolderPath) == .orderedAscending

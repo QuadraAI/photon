@@ -85,8 +85,6 @@ struct EditorViewModelTests {
         loading.cancel()
         await loading.value
 
-        // A cancelled walk reports no photos, so this must not read as an empty
-        // folder.
         #expect(editor.library == .loading)
     }
 
@@ -101,15 +99,12 @@ struct EditorViewModelTests {
 
         #expect(editor.selection == nil)
         #expect(editor.openTool == nil)
-        guard case .nothingSelected = editor.canvas else {
-            Issue.record("Expected an empty canvas, got \(editor.canvas)")
-            return
-        }
+        #expect(editor.isShowingNothing)
     }
 
     // MARK: - Selecting a photo
 
-    @Test("Selecting a photo puts it on the canvas")
+    @Test("Selecting a photo decodes it and puts it on the canvas")
     func selectingRendersThePhoto() async {
         let photo = PhotoItem.fixture()
         let renderer = StubPhotoRenderer()
@@ -118,11 +113,7 @@ struct EditorViewModelTests {
         await editor.select(photo)
 
         #expect(editor.selection == photo)
-        guard case .ready(let shown, _) = editor.canvas else {
-            Issue.record("Expected a rendered photo, got \(editor.canvas)")
-            return
-        }
-        #expect(shown == photo)
+        #expect(editor.decodedPhoto == photo)
         #expect(renderer.requestedURLs == [photo.url])
     }
 
@@ -133,11 +124,7 @@ struct EditorViewModelTests {
 
         await editor.select(photo)
 
-        guard case .failed(let failed) = editor.canvas else {
-            Issue.record("Expected a failure, got \(editor.canvas)")
-            return
-        }
-        #expect(failed == photo)
+        #expect(editor.failedPhoto == photo)
         #expect(editor.selection == photo, "A photo that will not decode is still the one being looked at")
     }
 
@@ -150,11 +137,22 @@ struct EditorViewModelTests {
         editor.beginSelecting(photo)
 
         #expect(editor.selection == photo)
-        guard case .loading(let loading) = editor.canvas else {
-            Issue.record("Expected the canvas to be loading at once, got \(editor.canvas)")
-            return
-        }
-        #expect(loading == photo)
+        #expect(editor.loadingPhoto == photo)
+    }
+
+    @Test("The file's own preview reaches the canvas before the decode does")
+    func draftReachesTheCanvasFirst() async {
+        let photo = PhotoItem.fixture()
+        // A draft that is instant and a decode that is not: what the canvas shows
+        // in between is the whole point of asking for one.
+        let renderer = StubPhotoRenderer(delay: .milliseconds(50))
+        let editor = makeEditor(renderer: renderer)
+
+        editor.beginSelecting(photo)
+        await Task.yield()
+
+        #expect(renderer.draftURLs == [photo.url])
+        #expect(editor.decodedPhoto == photo, "The decode has not finished yet")
     }
 
     @Test("A slower earlier decode cannot land on top of a later selection")
@@ -168,11 +166,7 @@ struct EditorViewModelTests {
         await editor.select(second)
         await slow.value
 
-        guard case .ready(let shown, _) = editor.canvas else {
-            Issue.record("Expected a rendered photo, got \(editor.canvas)")
-            return
-        }
-        #expect(shown == second)
+        #expect(editor.decodedPhoto == second)
     }
 
     // MARK: - Tools
@@ -182,33 +176,19 @@ struct EditorViewModelTests {
         #expect(makeEditor().openTool == nil)
     }
 
-    @Test("Toggling a tool opens its panel")
-    func togglingOpensThePanel() {
+    @Test("Toggling a tool opens its panel, closes it, and swaps it")
+    func togglingTools() {
         let editor = makeEditor()
 
         editor.toggleTool(.light)
-
         #expect(editor.openTool == .light)
-    }
-
-    @Test("Toggling the open tool closes it again")
-    func togglingTheSameToolCloses() {
-        let editor = makeEditor()
-        editor.toggleTool(.light)
 
         editor.toggleTool(.light)
+        #expect(editor.openTool == nil, "The tool that is open closes")
 
-        #expect(editor.openTool == nil)
-    }
-
-    @Test("Toggling a different tool swaps the panel rather than closing it")
-    func togglingAnotherToolSwaps() {
-        let editor = makeEditor()
         editor.toggleTool(.light)
-
         editor.toggleTool(.crop)
-
-        #expect(editor.openTool == .crop)
+        #expect(editor.openTool == .crop, "Another tool swaps the panel rather than closing it")
     }
 
     // MARK: - Undo
@@ -255,13 +235,18 @@ struct EditorViewModelTests {
 
     // MARK: - Filtering
 
-    @Test("An empty filter shows every photo")
-    func emptyFilterShowsEverything() async {
+    @Test("A filter that is empty, or only whitespace, shows every photo")
+    func noFilterShowsEverything() async {
         let photos = [PhotoItem.fixture(name: "a.jpg"), PhotoItem.fixture(name: "b.jpg")]
         let editor = makeEditor(library: StubPhotoLibrary(photos: photos))
         await editor.load(.fixture())
 
-        #expect(editor.visiblePhotos == photos)
+        #expect(editor.matches == photos)
+        #expect(editor.isFilteringToNothing == false)
+
+        editor.filter = "   "
+
+        #expect(editor.matches == photos)
         #expect(editor.isFilteringToNothing == false)
     }
 
@@ -276,7 +261,7 @@ struct EditorViewModelTests {
 
         editor.filter = "SUN"
 
-        #expect(editor.visiblePhotos.map(\.name) == ["Sunset.jpg"])
+        #expect(editor.matches.map(\.name) == ["Sunset.jpg"])
     }
 
     @Test("A filter matching nothing is distinguishable from an empty folder")
@@ -286,9 +271,7 @@ struct EditorViewModelTests {
 
         editor.filter = "nothing-like-this"
 
-        #expect(editor.visiblePhotos.isEmpty)
-        // Worth telling apart: an empty folder is a normal state, a filter that
-        // hides everything is something the user just did.
+        #expect(editor.matches.isEmpty)
         #expect(editor.isFilteringToNothing)
     }
 
@@ -303,16 +286,77 @@ struct EditorViewModelTests {
         #expect(editor.filter.isEmpty)
     }
 
-    @Test("A filter that only holds whitespace is treated as no filter")
-    func blankFilterIsNoFilter() async {
-        let photos = [PhotoItem.fixture(name: "a.jpg")]
-        let editor = makeEditor(library: StubPhotoLibrary(photos: photos))
+    // MARK: - The listed tree
+
+    @Test("A folder's photos are listed under it, folders before photos")
+    func listsPhotosUnderTheirFolder() async throws {
+        let editor = makeEditor(
+            library: StubPhotoLibrary(photos: [
+                .fixture(name: "root.jpg"),
+                .fixture(name: "delta.jpg", subfolderPath: "Subfolder"),
+                .fixture(name: "gamma.png", subfolderPath: "Subfolder"),
+                .fixture(name: "beta.png", subfolderPath: "Holiday"),
+            ])
+        )
         await editor.load(.fixture())
 
-        editor.filter = "   "
+        // Two folders, then the one photo that sits in the root.
+        #expect(editor.nodes.map(\.name) == ["Holiday", "Subfolder", "root.jpg"])
 
-        #expect(editor.visiblePhotos == photos)
-        #expect(editor.isFilteringToNothing == false)
+        let subfolder = try #require(folder(editor.nodes.first { $0.name == "Subfolder" }))
+        #expect(subfolder.children.map(\.name) == ["delta.jpg", "gamma.png"])
+        #expect(subfolder.photoCount == 2)
+    }
+
+    @Test("A folder of folders is a tree, and counts everything below it")
+    func nestsFolders() async throws {
+        let editor = makeEditor(
+            library: StubPhotoLibrary(photos: [
+                .fixture(name: "delta.jpg", subfolderPath: "Holiday/Sub"),
+                .fixture(name: "gamma.png", subfolderPath: "Holiday/Sub"),
+            ])
+        )
+        await editor.load(.fixture())
+
+        // The folder with no photos of its own holds only the folder below it,
+        // which is what a camera's `100MSDCF`-style dump looks like.
+        let holiday = try #require(folder(editor.nodes.first))
+        #expect(holiday.name == "Holiday")
+        #expect(holiday.children.map(\.name) == ["Sub"])
+        #expect(holiday.photoCount == 2, "A folder counts what is below it")
+
+        let sub = try #require(folder(holiday.children.first))
+        #expect(sub.name == "Sub")
+        #expect(sub.children.map(\.name) == ["delta.jpg", "gamma.png"])
+    }
+
+    @Test("Filtering leaves only the folders that still hold a match")
+    func filterPrunesTheTree() async {
+        let editor = makeEditor(
+            library: StubPhotoLibrary(photos: [
+                .fixture(name: "Sunset.jpg", subfolderPath: "Holiday"),
+                .fixture(name: "Portrait.jpg", subfolderPath: "Studio"),
+            ])
+        )
+        await editor.load(.fixture())
+        #expect(editor.nodes.map(\.name) == ["Holiday", "Studio"])
+
+        editor.filter = "Sunset"
+
+        #expect(editor.nodes.map(\.name) == ["Holiday"], "A folder with no match is not listed")
+        #expect(editor.matches.count == 1)
+    }
+
+    @Test("A row's id finds its photo, and a folder's finds nothing")
+    func lookUpByNodeID() async throws {
+        let photo = PhotoItem.fixture(name: "delta.jpg", subfolderPath: "Subfolder")
+        let editor = makeEditor(library: StubPhotoLibrary(photos: [photo]))
+        await editor.load(.fixture())
+
+        #expect(editor.photo(withNodeID: photo.url) == photo)
+
+        let subfolder = try #require(folder(editor.nodes.first))
+        #expect(editor.photo(withNodeID: subfolder.id) == nil, "A folder's row is not a photo")
     }
 
     // MARK: - Resizing
@@ -381,6 +425,40 @@ struct EditorViewModelTests {
         library: StubPhotoLibrary = StubPhotoLibrary(),
         renderer: StubPhotoRenderer = StubPhotoRenderer()
     ) -> EditorViewModel {
-        EditorViewModel(app: makeAppViewModel(), library: library, renderer: renderer)
+        EditorViewModel(library: library, renderer: renderer)
+    }
+
+    /// The folder a node is, or nil when it is a photo.
+    private func folder(_ node: LibraryNode?) -> LibraryNode.Folder? {
+        if case .folder(let folder) = node { return folder }
+        return nil
+    }
+}
+
+// The canvas is one state at a time, and a test is about one of them: these read
+// as the case under test, and are nil for the other three.
+private extension EditorViewModel {
+    /// The photo the canvas has decoded.
+    var decodedPhoto: PhotoItem? {
+        if case .ready(let photo, _) = canvas { return photo }
+        return nil
+    }
+
+    /// The photo the canvas is waiting on.
+    var loadingPhoto: PhotoItem? {
+        if case .loading(let photo) = canvas { return photo }
+        return nil
+    }
+
+    /// The photo the canvas could not decode.
+    var failedPhoto: PhotoItem? {
+        if case .failed(let photo) = canvas { return photo }
+        return nil
+    }
+
+    /// Whether the canvas has nothing to show at all.
+    var isShowingNothing: Bool {
+        if case .nothingSelected = canvas { return true }
+        return false
     }
 }

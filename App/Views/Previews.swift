@@ -94,7 +94,17 @@ private struct PreviewPhotoLibrary: PhotoLibraryLoading {
 /// Produces a flat swatch, which is enough to show the canvas is laid out and
 /// scaling rather than stretched.
 private struct PreviewPhotoRenderer: PhotoRendering {
+    func draft(for url: URL, maxPixelSize: Int) async throws(PhotoRenderError) -> CGImage {
+        try swatch(maxPixelSize: maxPixelSize)
+    }
+
     func preview(for url: URL, maxPixelSize: Int) async throws(PhotoRenderError) -> CGImage {
+        try swatch(maxPixelSize: maxPixelSize)
+    }
+
+    /// A flat swatch, which is enough to show the canvas is laid out and scaling
+    /// rather than stretched.
+    private func swatch(maxPixelSize: Int) throws(PhotoRenderError) -> CGImage {
         let size = CGSize(width: 1200, height: 800)
         guard let context = CGContext(
             data: nil,
@@ -140,7 +150,7 @@ private func previewScreen(
 }
 
 private func previewEditor(_ app: AppViewModel) -> EditorViewModel {
-    EditorViewModel(app: app, library: PreviewPhotoLibrary(), renderer: PreviewPhotoRenderer())
+    EditorViewModel(library: PreviewPhotoLibrary(), renderer: PreviewPhotoRenderer())
 }
 
 private extension View {
