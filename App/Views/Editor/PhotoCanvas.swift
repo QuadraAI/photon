@@ -3,6 +3,8 @@
 //  Photon
 //
 
+import CoreImage
+import Metal
 import SwiftUI
 
 /// The selected photo, or whatever should stand in for it.
@@ -79,19 +81,40 @@ struct PhotoCanvas: View {
         // the user can drag a handle back out past it. Every other time it shows
         // the crop itself.
         let image = editor.isCropping ? (editor.sessionBase ?? photo.base) : photo.image
-        let imageSize = CGSize(width: image.width, height: image.height)
+        let imageSize = image.extent.size
+        let name = editor.selection?.name ?? ""
 
         return GeometryReader { proxy in
             let frame = CropGeometry.fittedRect(imageSize: imageSize, in: proxy.size)
 
-            Image(image, scale: 1, orientation: .up, label: Text(editor.selection?.name ?? ""))
-                .resizable()
+            drawn(image, name: name)
                 .frame(width: frame.width, height: frame.height)
-                .accessibilityIdentifier("editor.canvas.image")
                 .overlay { CropLayer() }
                 .position(x: frame.midX, y: frame.midY)
         }
         .padding(16)
+    }
+
+    /// The picture itself: put on the GPU where there is one to put it on, and
+    /// drawn as pixels where there is not.
+    ///
+    /// A staged preview is a `CIImage`, which is a description rather than
+    /// pixels, so the canvas needs something that draws one — and a Metal-backed
+    /// view is what that is. It is also the whole point: a slider drag renders a
+    /// new preview per frame, and a view that takes the description lets the
+    /// next frame's work begin before the last one has been put on screen, where
+    /// asking for finished pixels makes every frame wait for the one before it.
+    @ViewBuilder private func drawn(_ image: CIImage, name: String) -> some View {
+        if MTLCreateSystemDefaultDevice() != nil {
+            MetalPhotoView(image: image, context: editor.previewContext, label: name)
+        } else if let flat = editor.previewContext.createCGImage(image, from: image.extent) {
+            // No Metal device: a simulator, or a machine whose GPU is
+            // unavailable. The engine stages previews on the CPU there, and the
+            // canvas shows them the way it did before the Metal view existed.
+            Image(flat, scale: 1, orientation: .up, label: Text(name))
+                .resizable()
+                .accessibilityIdentifier("editor.canvas.image")
+        }
     }
 
     private func message(

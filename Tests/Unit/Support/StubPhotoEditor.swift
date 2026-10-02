@@ -4,6 +4,7 @@
 //
 
 import CoreGraphics
+import CoreImage
 import Foundation
 import Synchronization
 
@@ -11,6 +12,10 @@ import Synchronization
 
 /// Scriptable ``PhotoEditing`` that decodes nothing.
 final class StubPhotoEditor: PhotoEditing, Sendable {
+    /// Nothing is drawn in a test, so this is a context to hand back rather than
+    /// one with anything in it.
+    let context = CIContext()
+
     private let image: Mutex<CGImage?>
     private let draftImage: Mutex<CGImage?>
     private let failure: Mutex<PhotoRenderError?>
@@ -76,6 +81,14 @@ final class StubPhotoEditor: PhotoEditing, Sendable {
         if let failure = failure.withLock({ $0 }) { throw failure }
         guard let image = image.withLock({ $0 }) else { throw .unreadable }
         return image
+    }
+
+    /// The staged photo, which for a stub is the one image it was built with.
+    ///
+    /// Answered by rendering, so a test counting what the canvas asked for keeps
+    /// counting it.
+    func preview(_ url: URL, recipe: EditRecipe, maxPixelSize: Int?) async throws(PhotoRenderError) -> CIImage {
+        CIImage(cgImage: try await render(url, recipe: recipe, maxPixelSize: maxPixelSize))
     }
 
     func pixelSize(of url: URL) async throws(PhotoRenderError) -> CGSize {

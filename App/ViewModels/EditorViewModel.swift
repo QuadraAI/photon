@@ -4,6 +4,7 @@
 //
 
 import CoreGraphics
+import CoreImage
 import Foundation
 import Observation
 import os
@@ -113,7 +114,7 @@ final class EditorViewModel {
     /// Nil whenever the crop tool is shut. While it is open, a handle drag only
     /// moves the overlay — the picture underneath is left alone and the region
     /// outside the crop is dimmed, which is what makes a drag cost nothing.
-    private(set) var sessionBase: CGImage?
+    private(set) var sessionBase: CIImage?
 
     /// Guards the macOS window maximiser so it runs once per window instead of
     /// fighting a user who resizes afterwards.
@@ -247,15 +248,18 @@ final class EditorViewModel {
                    let draft = try? await renderer.draft(for: item.url, maxPixelSize: AppLayout.previewMaxPixelSize),
                    Self.isSameShape(draft, as: sourceSize) {
                     guard !Task.isCancelled else { return }
-                    canvas = .ready(item, RenderedPhoto(image: draft, base: draft, sourceSize: sourceSize))
+                    // The draft is pixels the file already carried, so it becomes
+                    // Core Image's to draw like everything else the canvas shows.
+                    let stand = CIImage(cgImage: draft)
+                    canvas = .ready(item, RenderedPhoto(image: stand, base: stand, sourceSize: sourceSize))
                 }
 
-                let base = try await renderer.render(item.url, recipe: .identity, maxPixelSize: AppLayout.previewMaxPixelSize)
+                let base = try await renderer.preview(item.url, recipe: .identity, maxPixelSize: AppLayout.previewMaxPixelSize)
                 guard !Task.isCancelled else { return }
 
                 var image = base
                 if !recipe.isIdentity {
-                    image = try await renderer.render(item.url, recipe: recipe, maxPixelSize: AppLayout.previewMaxPixelSize)
+                    image = try await renderer.preview(item.url, recipe: recipe, maxPixelSize: AppLayout.previewMaxPixelSize)
                     guard !Task.isCancelled else { return }
                 }
 
@@ -434,6 +438,10 @@ final class EditorViewModel {
     }
 
     // MARK: - Colour
+
+    /// The context the engine stages previews with, and the one that has to
+    /// draw them: see ``PhotoEditing/context``.
+    var previewContext: CIContext { renderer.context }
 
     /// What the colour panel is showing: the drag in progress, or what the photo
     /// has been committed to.
@@ -781,7 +789,7 @@ final class EditorViewModel {
         )
 
         sessionBaseTask = Task { [renderer] in
-            guard let image = try? await renderer.render(
+            guard let image = try? await renderer.preview(
                 item.url,
                 recipe: recipe,
                 maxPixelSize: AppLayout.previewMaxPixelSize
@@ -811,18 +819,47 @@ final class EditorViewModel {
         reloadCanvas()
     }
 
+    /// Whether a render is on its way, and whether another was asked for while it
+    /// was.
+    ///
+    /// A slider drag asks for a picture per value, faster than a screen takes
+    /// frames. Cancelling and restarting for each of them spends a whole render
+    /// only to throw it away, and puts a task, an actor hop and a canvas
+    /// assignment on the main thread for every value the pointer produced — none
+    /// of which is work anybody sees, because the screen took one frame out of
+    /// it. One render in flight, with the newest value waiting behind it, is the
+    /// same picture on screen a frame later for a fraction of the work.
+    @ObservationIgnored private var isRendering = false
+    @ObservationIgnored private var isRenderPending = false
+
     /// Re-renders the canvas from the selected photo's current recipe.
     ///
     /// Every commit, undo and redo lands here: one render per history move, which
-    /// is exactly what a handle drag never has to do.
+    /// is exactly what a handle drag never has to do. A slider drag lands here
+    /// for every value it passes through, which is what the queue is for.
     private func reloadCanvas() {
+        guard !isRendering else {
+            isRenderPending = true
+            return
+        }
+
         renderTask?.cancel()
         guard let item = selection, let photo = renderedPhoto else { return }
 
         let recipe = currentSession?.displayedRecipe ?? .identity
+        isRendering = true
+
         renderTask = Task { [renderer] in
+            defer {
+                isRendering = false
+                if isRenderPending {
+                    isRenderPending = false
+                    reloadCanvas()
+                }
+            }
+
             do {
-                let image = try await renderer.render(item.url, recipe: recipe, maxPixelSize: AppLayout.previewMaxPixelSize)
+                let image = try await renderer.preview(item.url, recipe: recipe, maxPixelSize: AppLayout.previewMaxPixelSize)
                 guard !Task.isCancelled, selection?.url == item.url else { return }
                 canvas = .ready(item, RenderedPhoto(image: image, base: photo.base, sourceSize: photo.sourceSize))
             } catch {

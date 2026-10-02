@@ -4,6 +4,7 @@
 //
 
 #if DEBUG
+import CoreImage
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -96,6 +97,10 @@ private struct PreviewPhotoLibrary: PhotoLibraryLoading {
 /// a real size and renders at the size asked for, enough for the crop overlay to
 /// have a frame to sit on.
 private struct PreviewPhotoEditor: PhotoEditing {
+    /// A canvas draws its preview with the context that staged it; nothing here
+    /// is drawn anywhere but a preview, so it is a context like any other.
+    let context = CIContext()
+
     /// What the pretend photo is, in pixels. Reported to the crop maths and
     /// rendered at, so a preview of the crop tool shows a crop and not a
     /// contradiction.
@@ -103,6 +108,10 @@ private struct PreviewPhotoEditor: PhotoEditing {
 
     func draft(for url: URL, maxPixelSize: Int) async throws(PhotoRenderError) -> CGImage {
         try swatch()
+    }
+
+    func preview(_ url: URL, recipe: EditRecipe, maxPixelSize: Int?) async throws(PhotoRenderError) -> CIImage {
+        CIImage(cgImage: try swatch())
     }
 
     func render(_ url: URL, recipe: EditRecipe, maxPixelSize: Int?) async throws(PhotoRenderError) -> CGImage {

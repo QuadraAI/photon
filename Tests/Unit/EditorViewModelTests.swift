@@ -4,6 +4,7 @@
 //
 
 import CoreGraphics
+import CoreImage
 import Foundation
 import Testing
 
@@ -462,6 +463,10 @@ struct EditorViewModelTests {
         await editor.waitForCanvas()
 
         #expect(editor.sessionBase != nil, "The overlay has nothing to draw over")
+        #expect(
+            editor.sessionBase?.extent.isEmpty == false,
+            "A staged picture is laid out by its extent, so an empty one would draw nothing"
+        )
         #expect(
             renderer.renderedRecipes.contains { $0.crop.isIdentity && $0.color.saturation == 0.5 },
             "The overlay was handed a picture with the crop taken out but not the colour"

@@ -50,7 +50,11 @@ actor CoreImagePhotoEditor: PhotoEditing {
     /// A `CIContext` caches compiled kernels and intermediate buffers, so a second
     /// one costs a second compile and gives nothing back. Created in the
     /// composition root and injected, rather than reached for as a singleton.
-    private let context: CIContext
+    ///
+    /// Not private, because it is also what draws: a staged preview is handed to
+    /// a Metal view along with this, and the view renders it with the context
+    /// that built it.
+    nonisolated let context: CIContext
 
     /// The band maths, compiled once. Nil on a machine with no Metal device,
     /// where the three global sliders still work and the bands go quiet.
@@ -100,6 +104,58 @@ actor CoreImagePhotoEditor: PhotoEditing {
     }
 
     func render(_ url: URL, recipe: EditRecipe, maxPixelSize: Int?) async throws(PhotoRenderError) -> CGImage {
+        let staged = try await staged(url, recipe: recipe, maxPixelSize: maxPixelSize)
+
+        // Nothing was asked of the photo, so the file's own pixels come back
+        // rather than a copy of them that has been through a context and back.
+        if let decoded = staged.decoded { return decoded }
+
+        let rendered = context.createCGImage(
+            staged.image,
+            from: staged.image.extent,
+            format: .RGBA8,
+            colorSpace: staged.colorSpace
+        ) ?? context.createCGImage(staged.image, from: staged.image.extent)
+
+        guard let rendered else {
+            logger.error("Could not render \(url.path(percentEncoded: false))")
+            throw .unreadable
+        }
+
+        return rendered
+    }
+
+    func preview(_ url: URL, recipe: EditRecipe, maxPixelSize: Int?) async throws(PhotoRenderError) -> CIImage {
+        try await staged(url, recipe: recipe, maxPixelSize: maxPixelSize).image
+    }
+
+    // MARK: - The pipeline
+
+    /// A photo with the recipe's stages applied, and not yet drawn.
+    ///
+    /// The whole of the pipeline bar the last step, shared by the two ways out
+    /// of it: ``render(_:recipe:maxPixelSize:)`` asks this for pixels and
+    /// ``preview(_:recipe:maxPixelSize:)`` hands what comes back to a view. One
+    /// function, so the stage order is stated once however the photo leaves.
+    private struct Staged {
+        /// What Core Image will draw.
+        let image: CIImage
+
+        /// The decode itself, when nothing was asked of the photo.
+        ///
+        /// Kept so that a recipe that is not an edit can be answered with the
+        /// file's own pixels rather than a copy of them.
+        let decoded: CGImage?
+
+        /// The space the result belongs in, which is the file's own.
+        let colorSpace: CGColorSpace
+    }
+
+    private func staged(
+        _ url: URL,
+        recipe: EditRecipe,
+        maxPixelSize: Int?
+    ) async throws(PhotoRenderError) -> Staged {
         // A superseded click or a superseded crop should not be decoded at all:
         // the caller checks `isCancelled` and drops whatever comes back.
         guard !Task.isCancelled else { throw .unreadable }
@@ -107,10 +163,13 @@ actor CoreImagePhotoEditor: PhotoEditing {
         let sourceSize = try uprightSize(of: url)
         let limit = maxPixelSize ?? Int(max(sourceSize.width, sourceSize.height))
         let decoded = try decoded(url, maxPixelSize: limit)
+        let colorSpace = decoded.colorSpace ?? CGColorSpaceCreateDeviceRGB()
 
         let color = recipe.color
         let crop = recipe.crop
-        guard !color.isIdentity || !crop.isIdentity else { return decoded }
+        guard !color.isIdentity || !crop.isIdentity else {
+            return Staged(image: CIImage(cgImage: decoded), decoded: decoded, colorSpace: colorSpace)
+        }
 
         var image = CIImage(cgImage: decoded)
         if !color.isIdentity {
@@ -137,19 +196,7 @@ actor CoreImagePhotoEditor: PhotoEditing {
             by: CGAffineTransform(translationX: -cropped.extent.minX, y: -cropped.extent.minY)
         )
 
-        let rendered = context.createCGImage(
-            placed,
-            from: placed.extent,
-            format: .RGBA8,
-            colorSpace: decoded.colorSpace ?? CGColorSpaceCreateDeviceRGB()
-        ) ?? context.createCGImage(placed, from: placed.extent)
-
-        guard let rendered else {
-            logger.error("Could not render \(url.path(percentEncoded: false))")
-            throw .unreadable
-        }
-
-        return rendered
+        return Staged(image: placed, decoded: nil, colorSpace: colorSpace)
     }
 
     func pixelSize(of url: URL) async throws(PhotoRenderError) -> CGSize {
