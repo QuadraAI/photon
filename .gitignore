@@ -72,3 +72,6 @@ Photon.xcodeproj/
 
 # Local preview renders (regenerate with Xcode Previews)
 .previews/
+
+# The code graph index is a local, generated thing.
+.codegraph/
