@@ -3,7 +3,6 @@
 //  Photon
 //
 
-import CoreGraphics
 import CoreImage
 
 /// The picture the canvas is drawing.
@@ -34,9 +33,6 @@ nonisolated struct RenderedPhoto: Sendable {
     /// cancelling a crop, committing a drag that ended where it started — ask for
     /// the picture that is already up.
     let recipe: EditRecipe
-
-    /// The shape the picture is drawn at, which is what the canvas lays it out by.
-    var pixelSize: CGSize { image.extent.size }
 }
 
 /// The photo as the file gave it to us.

@@ -443,23 +443,6 @@
         }
       }
     },
-    "editor.sidebar.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Photos"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Photos"
-          }
-        }
-      }
-    },
     "editor.undo": {
       "extractionState": "manual",
       "localizations": {

@@ -1,7 +1,7 @@
 # AGENTS.md — Photo Editor (macOS + iPadOS)
 
 ## Harness
-DeepSeek harness. Use Xcode MCP for build, run, test and schemes. Inspect before editing. Small diffs. Build to verify. Don't invent APIs. On tool error, read and retry.
+DeepSeek harness. Use Xcode MCP for build, run, test and schemes. Inspect before editing. Small diffs. Build to verify. Don't invent APIs. On tool error, read and retry. Build and test **both** destinations — My Mac and an iPad simulator — before each commit.
 
 ## Role
 Senior Swift Engineer. SwiftUI, Swift 6.4 strict concurrency, Core Image, Metal, accessibility. macOS 27+, iPadOS 27+, Xcode 27.
@@ -47,6 +47,18 @@ Resources/
 - Preserve color space and metadata (EXIF, GPS, orientation, profile). Draw in the display's space — P3 on a P3 display. HDR/EDR is a later step and arrives when the pipeline is half‑float end to end; today the canvas is 8‑bit sRGB, which is a stated limit and not an oversight.
 - RAW goes through `CIRAWFilter`, for Apple's per‑camera calibration rather than the generic decode.
 - Heavy work off main actor (`Task.detached` or `actor`).
+- **One picture at a time on the canvas**, and the view model chooses which: the
+  committed recipe, or the photo *whole* while the crop tool is open. The view
+  draws what it is handed and decides nothing — a canvas that kept a second
+  picture to fall back on showed the file's own ungraded pixels over a grade,
+  which is the flash that rule removed.
+- **A change that must not be seen without its picture lands with it.** Confirming
+  or cancelling a crop renders the crop first, and records the step, closes the
+  panel and moves the undo mirror in the turn that picture appears. A turn
+  between them is a frame of the whole photo with nothing on it.
+- **Renders are paced to the display**: one every `1 / (2 × refresh)` at most
+  (`RenderPacing`), and a request inside the interval waits rather than being
+  dropped, so the value a drag ends on is always the one that lands.
 
 **The pipeline is data.** `EditRecipe` is the record; the stages that apply it are
 registered, and nothing that renders names a tool.
@@ -96,7 +108,9 @@ slider moves.
    `Equatable`, and lenient about fields an older recipe does not have.
 2. One new file with the tool: `own` (the key path it writes), `stage` (where it
    runs), `sample` (a value of its own, for the invariant test), and
-   `apply(_:to:context:)`.
+   `apply(_:to:context:)`. A stage that needs more than the picture — a mask, a
+   model — takes it from `EditContext`, which is deliberately the only extension
+   point a tool gets.
 3. A case in `ToolSession` if it has a draft, and the panel that edits it.
 4. One line in `EditTools.all`.
 5. Run the suite. The invariant test walks `EditTools.all`, so the new tool is
@@ -151,6 +165,8 @@ Swift Testing (`import Testing`); migrate XCTest to `#expect` / `#require` where
 The fixture folder is `Tests/Photos`, addressed as a plain filesystem path derived from `#filePath` and **never** built into the test bundle — the app is sandboxed with only user-selected file access, and the open panel treats a bundle as a single file.
 
 There are no UI tests. Driving the app from another process cost more than it caught: the faults that actually shipped — a canvas drawn at the wrong size, and one drawn in the wrong colour space — were invisible to it, because a UI test can assert where a view *is* and not what it *looks like*. `Tests/Unit/Snapshots/` is where a drawing is held to its appearance now.
+
+The canvas itself cannot be snapshotted: `ImageRenderer` draws an `MTKView` blank. What the canvas shows is held by publish and render assertions in the view-model tests instead — which picture was put up, and when — rather than by a picture of it.
 
 ## Xcode MCP (DeepSeek Harness)
 
