@@ -78,13 +78,26 @@ actor FileSystemPhotoLibrary: PhotoLibraryLoading {
     }
 
     /// The file's image type, or nil when it is a directory or not an image.
-    ///
-    /// The system's answer rather than a second list of extensions kept here,
-    /// which means a text file renamed `.png` is listed and fails on decode.
     private func photoType(_ url: URL) -> UTType? {
-        guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentTypeKey]),
-              values.isDirectory != true,
-              let type = values.contentType,
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentTypeKey])
+        guard values?.isDirectory != true else { return nil }
+
+        return Self.imageType(reported: values?.contentType, for: url)
+    }
+
+    /// The image type a file is: what the system reported about it, and failing
+    /// that what the system reports about its name.
+    ///
+    /// Both answers are the system's, from the same declaration table — so this is
+    /// not the second list of extensions the approach exists to avoid. It is what
+    /// keeps a file from vanishing out of the folder without a word: a resource
+    /// lookup comes back empty on some volumes, and for a type the system has no
+    /// mapping for, and the file is an image either way.
+    ///
+    /// `nonisolated` and static so it is the whole of the decision, with no
+    /// filesystem under it to have to arrange in a test.
+    nonisolated static func imageType(reported: UTType?, for url: URL) -> UTType? {
+        guard let type = reported ?? UTType(filenameExtension: url.pathExtension),
               type.conforms(to: .image)
         else { return nil }
 

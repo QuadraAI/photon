@@ -66,4 +66,20 @@ enum AppLayout {
     /// Comfortably larger than any canvas on a 2× display, and small enough that
     /// stepping through a folder stays responsive.
     static let previewMaxPixelSize = 2048
+
+    /// How big a crop handle is drawn, and how much of the canvas catches a drag
+    /// on it.
+    ///
+    /// The two differ because 14 points is a fair target for a mouse and an
+    /// impossible one for a finger: the smaller square is what the user aims at,
+    /// the larger one is what actually responds.
+    static let cropHandleSize: CGFloat = 14
+    #if os(iOS)
+    static let cropHitTarget: CGFloat = 44
+    #else
+    static let cropHitTarget: CGFloat = 24
+    #endif
+
+    /// Width of a rule-of-thirds line inside the crop.
+    static let cropGridLineWidth: CGFloat = 0.5
 }

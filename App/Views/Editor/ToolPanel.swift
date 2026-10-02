@@ -7,9 +7,9 @@ import SwiftUI
 
 /// The open tool's panel, shown to the left of the rail.
 ///
-/// Scaffolding: the chrome, heading and behaviour are real, but the controls are
-/// deliberately absent until the render pipeline exists to make them mean
-/// something.
+/// The chrome, heading and behaviour are real. The crop tool's controls are real
+/// too; the other tools are still placeholders until the adjustments they name
+/// exist to be adjusted.
 struct ToolPanel: View {
     @Environment(EditorViewModel.self) private var editor
 
@@ -24,13 +24,7 @@ struct ToolPanel: View {
 
             Divider()
 
-            Text("tool.panel.comingSoon")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(16)
-
-            Spacer(minLength: 0)
+            content
         }
         .frame(width: editor.panelWidth)
         .frame(maxHeight: .infinity, alignment: .top)
@@ -38,5 +32,22 @@ struct ToolPanel: View {
         // glass surface, drawn by the group that holds them.
         // The identifier lives on the heading, not the panel: a container's
         // identifier is pushed down onto its children and would replace it.
+    }
+
+    @ViewBuilder private var content: some View {
+        switch tool {
+        case .crop:
+            CropPanel()
+        case .light, .color, .details, .presets:
+            VStack(alignment: .leading, spacing: 0) {
+                Text("tool.panel.comingSoon")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(16)
+
+                Spacer(minLength: 0)
+            }
+        }
     }
 }

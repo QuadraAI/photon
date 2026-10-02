@@ -26,12 +26,17 @@ struct PhotoCanvas: View {
             case .nothingSelected:
                 empty
             case .loading:
+                // Circular, and said so rather than left to the default. An
+                // indeterminate `ProgressView` is a spinner on some platforms and
+                // a *bar* on others, and a bar in the middle of the canvas while a
+                // photo loads is a bar the user has to watch appear and go.
                 ProgressView()
+                    .progressViewStyle(.circular)
                     .controlSize(.large)
                     .accessibilityLabel("editor.canvas.loading")
                     .offset(x: windowCentreOffset)
-            case .ready(_, let image):
-                photo(image)
+            case .ready(_, let photo):
+                picture(photo)
             case .failed:
                 message("editor.canvas.failed", systemImage: "exclamationmark.triangle.fill")
             }
@@ -54,18 +59,39 @@ struct PhotoCanvas: View {
         }
     }
 
+    /// The photo, laid out at the size it is actually drawn at.
+    ///
+    /// The rect is worked out rather than left to `.aspectRatio(contentMode: .fit)`,
+    /// which would hand the image view the whole pane and leave the crop overlay
+    /// nothing to sit on. A drag is only a position in the photo once it is
+    /// measured against the picture, so the picture has to *be* a frame — and
+    /// that frame is also what the canvas reports to a test as the photo's shape.
+    ///
     /// `CGImage` on both platforms, so the canvas needs no `#if` for something
     /// as ordinary as showing a picture.
     ///
     /// The labelled initialiser rather than `Image(decorative:)`: a decorative
     /// image is deliberately kept out of the accessibility tree, which would
     /// leave VoiceOver — and the UI tests — with nothing to find.
-    private func photo(_ image: CGImage) -> some View {
-        Image(image, scale: 1, orientation: .up, label: Text(editor.selection?.name ?? ""))
-            .resizable()
-            .aspectRatio(contentMode: .fit)
-            .padding(16)
-            .accessibilityIdentifier("editor.canvas.image")
+    private func picture(_ photo: RenderedPhoto) -> some View {
+        // While the crop tool is open the canvas shows the whole photo with the
+        // crop drawn over it, so what is being cropped away stays on screen and
+        // the user can drag a handle back out past it. Every other time it shows
+        // the crop itself.
+        let image = editor.isCropping ? (editor.sessionBase ?? photo.base) : photo.image
+        let imageSize = CGSize(width: image.width, height: image.height)
+
+        return GeometryReader { proxy in
+            let frame = CropGeometry.fittedRect(imageSize: imageSize, in: proxy.size)
+
+            Image(image, scale: 1, orientation: .up, label: Text(editor.selection?.name ?? ""))
+                .resizable()
+                .frame(width: frame.width, height: frame.height)
+                .accessibilityIdentifier("editor.canvas.image")
+                .overlay { CropLayer() }
+                .position(x: frame.midX, y: frame.midY)
+        }
+        .padding(16)
     }
 
     private func message(
@@ -93,5 +119,24 @@ struct PhotoCanvas: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Deliberately not `.accessibilityElement(children: .combine)`: that
         // would fold the button in with the text and make it unreachable.
+    }
+}
+
+/// The crop overlay, and only the crop overlay.
+///
+/// A view of its own so that a drag does not redraw the photo underneath it.
+/// Observation tracks what a body *reads*, and the canvas reads the crop to size
+/// this — so with the overlay inlined, every frame of a drag re-evaluated the
+/// canvas, rebuilt the image view, and laid the picture out again. Here the crop
+/// is read by this body alone and the picture is left where it is, which is both
+/// what makes dragging smooth and what the drag was always meant to be: the
+/// overlay moving over a photo that does not.
+private struct CropLayer: View {
+    @Environment(EditorViewModel.self) private var editor
+
+    var body: some View {
+        if editor.isCropping, let crop = editor.draftCrop {
+            CropOverlay(rect: crop.rect)
+        }
     }
 }

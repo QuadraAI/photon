@@ -192,13 +192,13 @@ nonisolated class EditorUITestCase: XCTestCase, @unchecked Sendable {
 
     @MainActor
     func row(_ name: String) -> XCUIElement {
-        app.descendants(matching: .any)["editor.sidebar.row.\(name)"]
+        app.photoRow(name)
     }
 
     /// A folder's row in the sidebar's tree.
     @MainActor
     func folderRow(_ path: String) -> XCUIElement {
-        app.descendants(matching: .any)["editor.sidebar.folder.\(path)"]
+        app.folderRow(path)
     }
 
     /// The sidebar's filter field.
@@ -266,5 +266,60 @@ nonisolated class EditorUITestCase: XCTestCase, @unchecked Sendable {
     @MainActor
     func tool(_ name: String) -> XCUIElement {
         app.buttons["editor.tools.\(name)"]
+    }
+
+    // MARK: - The canvas
+
+    /// The shape of the picture on the canvas: width ÷ height.
+    ///
+    /// Read from the image element's own frame, which is the whole point of the
+    /// canvas placing the picture at a fitted rect rather than letting the image
+    /// view fill the pane. If it filled the pane this would be the *window's*
+    /// shape and would say nothing about the photo.
+    @MainActor
+    var canvasAspectRatio: CGFloat {
+        let frame = app.images["editor.canvas.image"].frame
+        guard frame.height > 0 else { return 0 }
+        return frame.width / frame.height
+    }
+
+    /// Waits for the canvas to be showing a picture of `ratio`.
+    ///
+    /// A crop reaches the canvas through a render, so it is a frame or two behind
+    /// the click — and sometimes a good deal more, which a bare assertion would
+    /// catch mid-flight.
+    @MainActor
+    func waitForCanvasAspectRatio(_ ratio: CGFloat, timeout: TimeInterval = 30) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { object, _ in
+                guard let element = object as? XCUIElement, element.exists else { return false }
+                let frame = element.frame
+                guard frame.height > 0 else { return false }
+                return abs(frame.width / frame.height - ratio) < 0.02
+            },
+            object: app.images["editor.canvas.image"]
+        )
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+}
+
+extension XCUIApplication {
+    /// A photo's row in the sidebar's tree.
+    ///
+    /// Identifier lookups rather than element types: these are `List` rows, which
+    /// XCUITest does not expose as buttons — on either platform. `firstMatch`
+    /// because a row's combined accessibility element carries the identifier and
+    /// is not the only match for it, which reading allows and tapping does not.
+    func photoRow(_ name: String) -> XCUIElement {
+        row(matching: "editor.sidebar.row.\(name)")
+    }
+
+    /// A folder's row in the sidebar's tree.
+    func folderRow(_ path: String) -> XCUIElement {
+        row(matching: "editor.sidebar.folder.\(path)")
+    }
+
+    private func row(matching identifier: String) -> XCUIElement {
+        descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 }

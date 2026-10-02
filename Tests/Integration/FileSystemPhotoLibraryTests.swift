@@ -54,6 +54,42 @@ struct FileSystemPhotoLibraryTests {
         #expect(photos.map(\.name) == ["alpha.png"])
     }
 
+    @Test("Finds TIFF images, by either spelling of the extension")
+    func findsTIFFImages() async throws {
+        // The format a scanner writes and a photographer exports to. It is an
+        // image like any other.
+        let tree = try PhotoTree()
+        defer { tree.remove() }
+        try tree.addImage("scan.tiff")
+        try tree.addImage("scan.tif")
+        try tree.addImage("photo.png")
+
+        let photos = try await FileSystemPhotoLibrary().photos(in: tree.root)
+
+        #expect(photos.map(\.name) == ["photo.png", "scan.tif", "scan.tiff"])
+        #expect(photos.allSatisfy { $0.isRAW == false }, "A TIFF is not a raw file")
+    }
+
+    @Test("A photo is listed even when the system reports no type for the file")
+    func fallsBackToTheName() {
+        // What the fallback is for: `resourceValues` comes back with no content
+        // type on some volumes and for some types, and a file that is an image
+        // either way used to disappear from the folder without a word.
+        #expect(FileSystemPhotoLibrary.imageType(reported: nil, for: URL(filePath: "/p/scan.tiff")) == .tiff)
+        #expect(FileSystemPhotoLibrary.imageType(reported: nil, for: URL(filePath: "/p/shot.nef"))?.conforms(to: .rawImage) == true)
+    }
+
+    @Test("The name is only a fallback, so a text file is still not a photo")
+    func theFallbackDoesNotLetEverythingIn() {
+        // The point of asking the system rather than listing extensions: a file
+        // that is not an image is not one, whatever it is called.
+        #expect(FileSystemPhotoLibrary.imageType(reported: nil, for: URL(filePath: "/p/notes.txt")) == nil)
+        #expect(FileSystemPhotoLibrary.imageType(reported: nil, for: URL(filePath: "/p/README")) == nil)
+
+        // And what the system said about the file outranks what its name suggests.
+        #expect(FileSystemPhotoLibrary.imageType(reported: .plainText, for: URL(filePath: "/p/text.png")) == nil)
+    }
+
     @Test("Does not descend into packages")
     func skipsPackages() async throws {
         let tree = try PhotoTree()
@@ -171,7 +207,7 @@ struct FileSystemPhotoLibraryTests {
         #expect(try await library.photos(in: tree.root).count == 5_000)
         let scan = scanStart.duration(to: clock.now)
 
-        let editor = EditorViewModel(library: library, renderer: StubPhotoRenderer())
+        let editor = EditorViewModel(library: library, renderer: StubPhotoEditor())
         await editor.load(AuthorizedFolder(url: tree.root, bookmark: nil))
         let filterStart = clock.now
         editor.filter = "IMG_10"
@@ -191,32 +227,36 @@ private struct PhotoTree {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
-    /// Writes a real, decodable PNG at `path`, creating intermediate folders.
+    /// Writes a real, decodable image at `path`, in whatever format the name says,
+    /// creating intermediate folders.
     func addImage(_ path: String) throws {
-        let url = root.appending(path: path)
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
+        let url = try url(for: path)
+        let type = try #require(UTType(filenameExtension: url.pathExtension), "No type for \(path)")
+        let destination = try #require(
+            CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil)
         )
 
-        let destination = try #require(
-            CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
-        )
         CGImageDestinationAddImage(destination, try #require(Self.pixel()), nil)
         try #require(CGImageDestinationFinalize(destination))
     }
 
+    /// A file that is not an image at all.
     func addText(_ path: String) throws {
+        try Data("not a photo".utf8).write(to: try url(for: path))
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    /// Where `path` goes, with the folders on the way to it made.
+    private func url(for path: String) throws -> URL {
         let url = root.appending(path: path)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try Data("not a photo".utf8).write(to: url)
-    }
-
-    func remove() {
-        try? FileManager.default.removeItem(at: root)
+        return url
     }
 
     /// A 1×1 image, which is all the scanner should care about.

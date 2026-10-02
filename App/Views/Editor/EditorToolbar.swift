@@ -109,27 +109,44 @@ struct EditorToolbar: ToolbarContent {
 
     private var undoButton: some View {
         Button { editor.undo() } label: {
-            Label("editor.undo", systemImage: "arrow.uturn.backward")
+            Label { undoTitle } icon: { Image(systemName: "arrow.uturn.backward") }
                 .labelStyle(.iconOnly)
                 .font(.title2)
         }
         .disabled(!editor.canUndo)
         .keyboardShortcut("z", modifiers: .command)
-        .help("editor.undo")
-        .accessibilityLabel("editor.undo")
+        .help(undoTitle)
+        .accessibilityLabel(undoTitle)
         .accessibilityIdentifier("editor.toolbar.undo")
     }
 
     private var redoButton: some View {
         Button { editor.redo() } label: {
-            Label("editor.redo", systemImage: "arrow.uturn.forward")
+            Label { redoTitle } icon: { Image(systemName: "arrow.uturn.forward") }
                 .labelStyle(.iconOnly)
                 .font(.title2)
         }
         .disabled(!editor.canRedo)
         .keyboardShortcut("z", modifiers: [.command, .shift])
-        .help("editor.redo")
-        .accessibilityLabel("editor.redo")
+        .help(redoTitle)
+        .accessibilityLabel(redoTitle)
         .accessibilityIdentifier("editor.toolbar.redo")
+    }
+
+    /// What undoing would take back, by name: "Undo Crop 16:9".
+    ///
+    /// Naming the step is the only part of a History panel that fits in a
+    /// toolbar, and it is the part that matters most — the button says what it is
+    /// about to do before it is pressed, which is what a plain "Undo" cannot.
+    ///
+    /// A `Text` rather than a `String`: the name is looked up when it is drawn,
+    /// so it follows the app's language rather than the one that was on when the
+    /// step was recorded.
+    private var undoTitle: Text {
+        editor.undoName?.undoTitle ?? Text("editor.undo")
+    }
+
+    private var redoTitle: Text {
+        editor.redoName?.redoTitle ?? Text("editor.redo")
     }
 }

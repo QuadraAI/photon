@@ -18,13 +18,13 @@ struct RootView: View {
     @State private var folder: FolderViewModel
     @State private var editor: EditorViewModel
 
-    init(app: AppViewModel) {
+    init(app: AppViewModel, engine: PhotoEditing) {
         self.app = app
         _folder = State(initialValue: FolderViewModel(app: app))
         _editor = State(
             initialValue: EditorViewModel(
                 library: FileSystemPhotoLibrary(),
-                renderer: ImageIOPhotoRenderer()
+                renderer: engine
             )
         )
     }

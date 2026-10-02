@@ -91,21 +91,30 @@ private struct PreviewPhotoLibrary: PhotoLibraryLoading {
     }
 }
 
-/// Produces a flat swatch, which is enough to show the canvas is laid out and
-/// scaling rather than stretched.
-private struct PreviewPhotoRenderer: PhotoRendering {
+/// Stands in for the editing engine: a flat swatch, which is enough to show the
+/// canvas is laid out and scaling rather than stretched — and, because it reports
+/// a real size and renders at the size asked for, enough for the crop overlay to
+/// have a frame to sit on.
+private struct PreviewPhotoEditor: PhotoEditing {
+    /// What the pretend photo is, in pixels. Reported to the crop maths and
+    /// rendered at, so a preview of the crop tool shows a crop and not a
+    /// contradiction.
+    private static let size = CGSize(width: 1200, height: 800)
+
     func draft(for url: URL, maxPixelSize: Int) async throws(PhotoRenderError) -> CGImage {
-        try swatch(maxPixelSize: maxPixelSize)
+        try swatch()
     }
 
-    func preview(for url: URL, maxPixelSize: Int) async throws(PhotoRenderError) -> CGImage {
-        try swatch(maxPixelSize: maxPixelSize)
+    func render(_ url: URL, recipe: EditRecipe, maxPixelSize: Int?) async throws(PhotoRenderError) -> CGImage {
+        try swatch()
     }
 
-    /// A flat swatch, which is enough to show the canvas is laid out and scaling
-    /// rather than stretched.
-    private func swatch(maxPixelSize: Int) throws(PhotoRenderError) -> CGImage {
-        let size = CGSize(width: 1200, height: 800)
+    func pixelSize(of url: URL) async throws(PhotoRenderError) -> CGSize {
+        Self.size
+    }
+
+    private func swatch() throws(PhotoRenderError) -> CGImage {
+        let size = Self.size
         guard let context = CGContext(
             data: nil,
             width: Int(size.width),
@@ -128,7 +137,7 @@ private struct PreviewPhotoRenderer: PhotoRendering {
 
 /// A whole window, at the size the app actually opens at.
 private func previewWindow(_ app: AppViewModel) -> some View {
-    RootView(app: app).previewFramed()
+    RootView(app: app, engine: PreviewPhotoEditor()).previewFramed()
 }
 
 /// A single screen, wired the way `RootView` wires it.
@@ -150,7 +159,7 @@ private func previewScreen(
 }
 
 private func previewEditor(_ app: AppViewModel) -> EditorViewModel {
-    EditorViewModel(library: PreviewPhotoLibrary(), renderer: PreviewPhotoRenderer())
+    EditorViewModel(library: PreviewPhotoLibrary(), renderer: PreviewPhotoEditor())
 }
 
 private extension View {
@@ -225,6 +234,28 @@ private extension View {
         }
 }
 
+/// The crop tool mid-session: the whole photo with everything outside the crop
+/// dimmed, and the panel that can make the same crop without a pointer.
+///
+/// The one state that cannot be previewed any other way, because it only exists
+/// between opening the tool and committing it — and it is the state where a
+/// mistake in the overlay's placement is most obvious.
+#Preview("Editor — cropping") {
+    let app = AppViewModel.preview(AppPreferences(language: .english))
+    let editor = previewEditor(app)
+
+    return previewScreen(EditorView(folder: previewFolder), app: app, editor: editor)
+        .previewEditorFramed()
+        .task {
+            await editor.load(previewFolder)
+            if case .loaded(let photos) = editor.library, let photo = photos.first {
+                await editor.select(photo)
+            }
+            editor.toggleTool(.crop)
+            editor.setCropAspect(.fixed(width: 16, height: 9))
+        }
+}
+
 /// The tool panel and rail together.
 ///
 /// Previewed directly rather than through the editor because the editor's panel
@@ -252,7 +283,7 @@ private extension View {
 /// Guards the accessibility requirement that the layout reflows at the largest
 /// Dynamic Type sizes instead of clipping.
 #Preview("Welcome — accessibility text") {
-    RootView(app: .preview(AppPreferences(language: .english)))
+    RootView(app: .preview(AppPreferences(language: .english)), engine: PreviewPhotoEditor())
         .previewFramed()
         .environment(\.dynamicTypeSize, .accessibility3)
 }
