@@ -367,7 +367,7 @@ final class EditorViewModel {
 
     /// Back to the photo as the file holds it: whole, and the right way up.
     func resetCrop() {
-        currentSession?.updateDraft(.identity)
+        currentSession?.changeCrop { $0 = .identity }
         refreshCanvas()
     }
 
@@ -444,7 +444,7 @@ final class EditorViewModel {
         let recipe = EditRecipe(crop: draft, color: session.history.current.color)
 
         refreshCanvas(recipe) {
-            session.commit()
+            session.recordCrop()
             if closePanel { self.openTool = nil }
             self.refreshUndoState()
         }
@@ -459,7 +459,7 @@ final class EditorViewModel {
         guard let session = currentSession else { return }
 
         refreshCanvas(session.history.current) {
-            session.cancel()
+            session.discard()
             self.openTool = nil
         }
     }
@@ -484,7 +484,7 @@ final class EditorViewModel {
     /// the tool is a panel, and only a slider moved is an edit.
     func beginColorChange() {
         guard let item = selection else { return }
-        session(for: item).beginColorSession()
+        session(for: item).open(.color)
     }
 
     /// Closes a colour change, committing whatever it moved as one step.
@@ -516,8 +516,8 @@ final class EditorViewModel {
     func resetColor() {
         guard let item = selection else { return }
         let session = session(for: item)
-        session.beginColorSession()
-        session.updateColorDraft(.identity)
+        session.open(.color)
+        session.changeColour { $0 = .identity }
         commitColorSession()
     }
 
@@ -532,7 +532,7 @@ final class EditorViewModel {
     /// The panel stays open, unlike the crop's: it is a tool rather than a
     /// session, and the next photo is very often the one being graded next.
     func commitColorSession() {
-        guard currentSession?.commitColor() ?? false else { return }
+        guard currentSession?.recordColour() ?? false else { return }
 
         refreshUndoState()
         refreshCanvas()
@@ -544,9 +544,7 @@ final class EditorViewModel {
     /// built from the fields that did not: a slider added later cannot be quietly
     /// dropped by a call site that never heard of it.
     private func changeColor(_ change: (inout ColorAdjustments) -> Void) {
-        guard var draft = currentSession?.colorDraft else { return }
-        change(&draft)
-        currentSession?.updateColorDraft(draft)
+        currentSession?.changeColour(change)
         refreshCanvas()
     }
 
@@ -756,7 +754,7 @@ final class EditorViewModel {
 
     private func beginCropSession() {
         guard let item = selection else { return }
-        session(for: item).beginCropSession()
+        session(for: item).open(.crop)
         refreshUndoState()
     }
 
@@ -766,9 +764,7 @@ final class EditorViewModel {
     /// built from the ones that did not: a field added later cannot be quietly
     /// dropped by a call site that never heard of it.
     private func changeDraft(_ change: (inout Crop) -> Void) {
-        guard var draft = currentSession?.draft else { return }
-        change(&draft)
-        currentSession?.updateDraft(draft)
+        currentSession?.changeCrop(change)
     }
 
     /// The recipe that makes the picture the crop overlay sits on: the photo

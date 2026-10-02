@@ -48,6 +48,66 @@ Resources/
 - RAW goes through `CIRAWFilter`, for Apple's per‑camera calibration rather than the generic decode.
 - Heavy work off main actor (`Task.detached` or `actor`).
 
+**The pipeline is data.** `EditRecipe` is the record; the stages that apply it are
+registered, and nothing that renders names a tool.
+
+```
+EditRecipe (Codable record)        PipelineStage.allCases, in order
+  ├─ color: ColorAdjustments ─┐      decode
+  └─ crop: Crop ──────────────┤        → .colour    ColorTool
+                              ▼        → .geometry  CropTool
+staged(recipe:) : CIImage              → display | export
+```
+
+| Rule | Guard |
+|---|---|
+| A commit writes **only its own field**; every other field is copied from the current recipe, never from a default | `EditTool.own: WritableKeyPath<EditRecipe, Value>`; every commit goes through `EditTool.commit(_:into:)` |
+| A commit is a **delta on the current recipe** | `commit(_:into:)` is seeded with `history.current`; a tool never builds a recipe |
+| **History is append-only** for tools | `history` is private to `PhotoEditSession`; only recording (append) and undo/redo (the cursor) are exposed |
+| A tool **cannot reorder the pipeline** | `PipelineStage` is an enum; declaration order *is* the order; there is no insert or move API |
+| A tool **cannot see another tool's internals** | `apply(_:to:context:)` gets its own `Value` and the image; `EditContext` carries the engine, never the recipe |
+| A new tool **cannot invalidate old recipes** | Optional fields with `decodeIfPresent`, plus the two rules above |
+
+**One value per session.** Which tool a photo has open, and what that tool is
+working on, is one value — `ToolSession` — so a crop being dragged and a grade
+being dragged at once is not a state the type can be in:
+
+```mermaid
+stateDiagram-v2
+    [*] --> none
+    none --> crop: open crop (begin from the committed crop)
+    none --> colour: open colour (begin from the committed grade)
+    crop --> crop: drag / ratio / rotate (draft changes only)
+    crop --> none: record and leave | discard | undo/redo
+    colour --> colour: slider (draft changes only)
+    colour --> none: close panel | undo/redo
+    crop --> colour: switch tool (record, then open colour)
+    colour --> crop: switch tool (record, then open crop)
+```
+
+The *panel* is not in it: which panel a window is showing
+(`EditorViewModel.openTool`) is a different question from what a photo has open,
+which is why the colour panel stays open across photos and costs nothing until a
+slider moves.
+
+**Adding a tool:**
+
+1. A value type for what it does (`ColorAdjustments`, `Crop`): `Codable`,
+   `Equatable`, and lenient about fields an older recipe does not have.
+2. One new file with the tool: `own` (the key path it writes), `stage` (where it
+   runs), `sample` (a value of its own, for the invariant test), and
+   `apply(_:to:context:)`.
+3. A case in `ToolSession` if it has a draft, and the panel that edits it.
+4. One line in `EditTools.all`.
+5. Run the suite. The invariant test walks `EditTools.all`, so the new tool is
+   covered without a test being written for it.
+
+A tool **never names another tool's field**, and **never reorders a stage**. The
+order is a specification and not a preference: a tonal stage that ran on a
+cropped picture would measure the crop rather than the photo, and two crops of
+one picture would come out differently graded. A new *stage* is a change to
+`PipelineStage` — a change to the pipeline, not to a tool.
+
 **Persistence:** `Codable` for recipes and presets, written as files — a preset is a document the user can move between machines, and an edit belongs with the photo it is of. Images stay file references, never blobs. SwiftData is for a catalogue of *relationships* (keywords, collections, sessions) if one is ever needed, not for edits. (An earlier draft of this file named SwiftData for `Preset` and `Codable` for presets in the same breath; that was a contradiction, not a plan.)
 
 **Undo/Redo:** `UndoManager`. Snapshot the recipe, not the image.

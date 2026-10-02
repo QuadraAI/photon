@@ -75,12 +75,6 @@ actor CoreImagePhotoEditor: PhotoEditing {
     /// a different set of pixels would not.
     private static let castSampleSize = 256
 
-    /// How far a channel may be pushed to take a cast out.
-    ///
-    /// A photo that is one colour throughout — a frame filled by a leaf — would
-    /// otherwise ask for an unbounded correction.
-    private static let castGainRange: ClosedRange<Double> = 0.5...2
-
     init() {
         // Metal where there is a device, the CPU otherwise — a simulator, or a
         // machine whose GPU is unavailable. Falling back keeps the app working
@@ -171,32 +165,25 @@ actor CoreImagePhotoEditor: PhotoEditing {
             return Staged(image: CIImage(cgImage: decoded), decoded: decoded, colorSpace: colorSpace)
         }
 
-        var image = CIImage(cgImage: decoded)
-        if !color.isIdentity {
-            image = coloured(image, with: color, of: url)
-        }
-
-        if crop.rotation != .none {
-            // `oriented(_:)` rather than a transform: it re-derives the extent,
-            // where a rotation of a quarter turn about the origin leaves the
-            // picture sitting outside its own bounds.
-            image = image.oriented(crop.rotation.orientation)
-        }
-
-        let extent = image.extent
-        let frame = CropGeometry.turnedSize(sourceSize, by: crop.rotation)
-        let rect = CropGeometry.coreImageRect(crop.rect, frame: frame, extent: extent).integral
-
-        let cropped = image.cropped(to: rect)
-        // `cropped(to:)` keeps the crop where it was in the parent, so what is
-        // left is the same size as the photo with everything outside the rect
-        // transparent. Moving it back to the origin is what makes the render the
-        // size of the crop.
-        let placed = cropped.transformed(
-            by: CGAffineTransform(translationX: -cropped.extent.minX, y: -cropped.extent.minY)
+        // The pipeline, walked rather than written out: every stage in the order
+        // the enum declares, and every tool that runs at it. A tool that is
+        // registered is in the pipeline, and nothing here has to know its name.
+        let edit = EditContext(
+            imageContext: context,
+            colorKernel: colorKernel,
+            url: url,
+            sourceSize: sourceSize,
+            castGains: { [weak self] url in await self?.castGains(of: url) }
         )
 
-        return Staged(image: placed, decoded: nil, colorSpace: colorSpace)
+        var image = CIImage(cgImage: decoded)
+        for stage in PipelineStage.allCases {
+            for tool in EditTools.all where tool.stage == stage {
+                image = await tool.apply(recipe, image, edit)
+            }
+        }
+
+        return Staged(image: image, decoded: nil, colorSpace: colorSpace)
     }
 
     func pixelSize(of url: URL) async throws(PhotoRenderError) -> CGSize {
@@ -204,42 +191,6 @@ actor CoreImagePhotoEditor: PhotoEditing {
     }
 
     // MARK: - Colour
-
-    /// The photo with the colour tool's stages applied.
-    ///
-    /// Every stage is skipped when it is not asked for, so a photo with only a
-    /// cast correction never pays for the kernel, and one with only a band shift
-    /// never pays for the measurement.
-    private func coloured(_ image: CIImage, with color: ColorAdjustments, of url: URL) -> CIImage {
-        var image = image
-
-        if color.colorCast > 0, let gains = castGains(of: url) {
-            image = Self.balanced(image, by: gains, amount: color.colorCast)
-        }
-
-        if color.vibrance != 0 {
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = image
-            vibrance.amount = Float(color.vibrance)
-            image = vibrance.outputImage ?? image
-        }
-
-        if color.saturation != 0 {
-            let controls = CIFilter.colorControls()
-            controls.inputImage = image
-            // −1 is grey and +1 is twice the colour, which is what a saturation
-            // slider is expected to do at its ends.
-            controls.saturation = Float(1 + color.saturation)
-            image = controls.outputImage ?? image
-        }
-
-        if color.hasBandShift, let colorKernel,
-           let banded = ColorKernel.apply(color, to: image, using: colorKernel) {
-            image = banded
-        }
-
-        return image
-    }
 
     /// How far each channel has to move to take the photo's own cast out.
     ///
@@ -253,7 +204,13 @@ actor CoreImagePhotoEditor: PhotoEditing {
     /// pulls it toward grey anyway. The slider's default is off, which is where a
     /// photo like that should stay. `CIAreaAverage` is the piece to replace when
     /// a better estimate arrives; nothing else has to move.
-    private func castGains(of url: URL) -> SIMD3<Double>? {
+    ///
+    /// Here rather than in the colour tool because it is a decode of the file and
+    /// the engine is what reads files — and remembered here, because a slider drag
+    /// asks for it on every frame.
+    nonisolated func castGains(of url: URL) async -> SIMD3<Double>? { await measuredCast(of: url) }
+
+    private func measuredCast(of url: URL) -> SIMD3<Double>? {
         if let lastCast, lastCast.url == url { return lastCast.gains }
 
         guard let sample = try? thumbnail(for: url, maxPixelSize: Self.castSampleSize, from: .picture) else {
@@ -288,31 +245,13 @@ actor CoreImagePhotoEditor: PhotoEditing {
         // A channel that is already at zero cannot be brought up by a multiplier,
         // so it asks for the most the range allows and the clamp answers.
         func gain(_ channel: Double) -> Double {
-            guard channel > 1e-5 else { return Self.castGainRange.upperBound }
-            return (neutral / channel).clamped(to: Self.castGainRange)
+            guard channel > 1e-5 else { return ColorTool.castGainRange.upperBound }
+            return (neutral / channel).clamped(to: ColorTool.castGainRange)
         }
 
         let gains = SIMD3(gain(mean.x), gain(mean.y), gain(mean.z))
         lastCast = (url, gains)
         return gains
-    }
-
-    /// The photo with each channel moved `amount` of the way to its gain.
-    ///
-    /// Applied in the working space, which is linear: a white balance multiplies
-    /// light. The same multiplication on gamma-encoded values would correct by a
-    /// different amount in the shadows than in the highlights.
-    private static func balanced(_ image: CIImage, by gains: SIMD3<Double>, amount: Double) -> CIImage {
-        func scaled(_ gain: Double) -> CGFloat { CGFloat(1 + amount * (gain - 1)) }
-
-        let matrix = CIFilter.colorMatrix()
-        matrix.inputImage = image
-        matrix.rVector = CIVector(x: scaled(gains.x), y: 0, z: 0, w: 0)
-        matrix.gVector = CIVector(x: 0, y: scaled(gains.y), z: 0, w: 0)
-        matrix.bVector = CIVector(x: 0, y: 0, z: scaled(gains.z), w: 0)
-        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
-        matrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
-        return matrix.outputImage ?? image
     }
 
     // MARK: - ImageIO

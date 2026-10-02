@@ -36,6 +36,34 @@ struct CoreImagePhotoEditorTests {
 
     // MARK: - Identity
 
+    @Test("A recipe written before a tool existed still decodes, and still renders")
+    func anOlderRecipeStillDecodesAndRenders() async throws {
+        // Recipes are values and tools are behaviour: a recipe written by a build
+        // that had no colour tool is still a recipe, and what it asks for goes
+        // through whatever pipeline exists when it is read.
+        //
+        // Written by removing the key rather than by encoding a value, because that
+        // is what the older build wrote: a recipe with no colour in it at all.
+        let crop = Crop(rect: CGRect(x: 0, y: 0, width: 0.5, height: 0.5), aspect: .free, rotation: .none)
+        let encoded = try JSONEncoder().encode(EditRecipe(crop: crop))
+        var fields = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        fields.removeValue(forKey: "color")
+
+        let legacy = try JSONDecoder().decode(
+            EditRecipe.self,
+            from: JSONSerialization.data(withJSONObject: fields)
+        )
+
+        #expect(legacy.color == .identity, "A recipe with no colour in it asks for the photo's own")
+
+        // And it renders: half the photo on both axes, with the colour stage
+        // handing on a value it was never told about.
+        let rendered = try await editor.render(landscape, recipe: legacy, maxPixelSize: nil)
+
+        #expect(rendered.width == 32, "Half of a 64-pixel-wide photo")
+        #expect(rendered.height == 24, "And half of a 48-pixel-tall one")
+    }
+
     @Test("A photo with nothing done to it comes back at the size it was asked for")
     func identityRendersThePhoto() async throws {
         let image = try await editor.render(landscape, recipe: .identity, maxPixelSize: 2048)

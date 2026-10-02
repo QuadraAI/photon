@@ -26,20 +26,14 @@ final class PhotoEditSession {
     /// Every step taken on this photo, and where in them it currently is.
     private(set) var history: EditHistory
 
-    /// The crop being worked on while the crop tool is open, and nil otherwise.
+    /// The tool that is open on this photo, and what it is working on.
     ///
-    /// Held apart from ``history`` so a session can be abandoned — Escape, or
-    /// closing the tool — without leaving anything behind. Nothing is recorded
-    /// until it is committed, so a drag costs no history and a session that ended
-    /// where it started costs no step.
-    private(set) var draft: Crop?
-
-    /// The colour being worked on between the start of a slider drag and its end.
-    ///
-    /// The same bargain the crop draft strikes, for the same reason: a drag
-    /// reports a value per frame and a step per frame would bury the history
-    /// under one gesture. ``EditorViewModel/endColorChange()`` is what closes it.
-    private(set) var colorDraft: ColorAdjustments?
+    /// One value, and at most one tool: a crop being dragged and a grade being
+    /// dragged are not two sessions that have to agree, they are two cases of one
+    /// value that cannot both be true. Nothing is recorded until the tool is let
+    /// go, so a drag costs no history and a session that ended where it started
+    /// costs no step.
+    private(set) var tool: ToolSession = .none
 
     /// What undoing and redoing would do, mirrored from ``history`` so the toolbar
     /// and the Edit menu have something observable to react to.
@@ -60,31 +54,103 @@ final class PhotoEditSession {
 
     // MARK: - Reading
 
-    /// What the canvas should be showing: the drafts while their tools are open,
-    /// the committed recipe otherwise.
+    /// What the canvas should be showing: the draft while its tool is open, the
+    /// committed recipe otherwise.
+    ///
+    /// A delta on the committed recipe, like every other write — the open tool's
+    /// field replaced through the key path its tool owns. Building the recipe from
+    /// the fields named here instead would quietly drop the field of a tool added
+    /// later, which is the same mistake as a commit that builds a fresh recipe.
     var displayedRecipe: EditRecipe {
-        EditRecipe(crop: draft ?? history.current.crop, color: displayedColor)
+        switch tool {
+        case .none:
+            history.current
+        case .crop(let crop):
+            CropTool.commit(crop, into: history.current)
+        case .colour(let colour):
+            ColorTool.commit(colour, into: history.current)
+        }
     }
 
     /// The colours the panel is showing: the drag in progress, or what the photo
     /// has been committed to.
-    var displayedColor: ColorAdjustments {
-        colorDraft ?? history.current.color
+    var displayedColor: ColorAdjustments { displayedRecipe.color }
+
+    /// The crop being worked on, or nil when the crop tool is not the one open.
+    ///
+    /// What the overlay draws and the panel edits, read off the one value that
+    /// knows.
+    var draft: Crop? { tool.draftCrop }
+
+    // MARK: - The open tool
+
+    /// Opens `tool` on this photo, starting from what the photo is committed to.
+    ///
+    /// Whatever was open is recorded first, because switching tools is one of the
+    /// ways out of a tool and the rule is the same for all of them: record, then
+    /// open. Leaving it to the caller to remember is how a crop came to be dropped
+    /// by a slider touched in the moment between one panel closing and the picture
+    /// it recorded arriving.
+    ///
+    /// A tool that is already open is left where it is rather than restarted: a
+    /// drag that begins on one slider and ends on another is still one step, and
+    /// so is a crop handle taken up again.
+    func open(_ tool: Tool) {
+        guard self.tool.tool != tool else { return }
+        record()
+
+        switch tool {
+        case .crop:
+            self.tool = .crop(history.current.crop)
+        case .color:
+            self.tool = .colour(history.current.color)
+        case .light, .presets:
+            // Panels that are still placeholders: nothing to work on yet.
+            self.tool = .none
+        }
     }
 
-    // MARK: - Cropping
-
-    /// Opens the crop tool, starting from the crop the photo already has.
-    func beginCropSession() {
-        draft = history.current.crop
+    /// Changes the crop being worked on, in place, and does nothing when the crop
+    /// tool is not the one open.
+    ///
+    /// A copy with the fields that changed set on it, rather than a fresh `Crop`
+    /// built from the ones that did not: a field added later cannot be quietly
+    /// dropped by a call site that never heard of it.
+    func changeCrop(_ change: (inout Crop) -> Void) {
+        guard case .crop(var crop) = tool else { return }
+        change(&crop)
+        tool = .crop(crop)
     }
 
-    func updateDraft(_ crop: Crop) {
-        guard draft != nil else { return }
-        draft = crop
+    /// Changes the colours being worked on, in place, and does nothing when the
+    /// colour tool is not the one open.
+    func changeColour(_ change: (inout ColorAdjustments) -> Void) {
+        guard case .colour(var colour) = tool else { return }
+        change(&colour)
+        tool = .colour(colour)
     }
 
-    /// Records the draft as a single step, named after what it changed.
+    /// Lets the tool go without recording anything: Escape and Cancel have to be
+    /// able to cost nothing.
+    func discard() {
+        tool = .none
+    }
+
+    // MARK: - Recording what a tool did
+
+    /// Records whatever tool is open, as a single step, and lets it go.
+    ///
+    /// - Returns: Whether anything was recorded.
+    @discardableResult
+    func record() -> Bool {
+        switch tool {
+        case .none: false
+        case .crop: recordCrop()
+        case .colour: recordColour()
+        }
+    }
+
+    /// Records the crop being worked on as a single step, and lets the tool go.
     ///
     /// One step per session however many handles were dragged: a step per drag
     /// would bury the history under a few seconds of fiddling, and the whole
@@ -93,66 +159,46 @@ final class PhotoEditSession {
     /// - Returns: Whether anything was recorded. A session that ended where it
     ///   started leaves nothing behind, so ⌘Z is not spent on a no-op.
     @discardableResult
-    func commit() -> Bool {
-        guard let draft else { return false }
-        self.draft = nil
+    func recordCrop() -> Bool {
+        guard case .crop(let crop) = tool else { return false }
+        tool = .none
 
-        let base = history.current.crop
-        guard draft != base else { return false }
-
-        // The colour is carried over rather than defaulted. A tool writes its own
-        // field of the recipe and copies every other one from what is committed —
-        // building a fresh `EditRecipe` here silently threw the grade away, and
-        // the rule is what stops the next tool doing the same to the crop.
-        history.record(
-            EditRecipe(crop: draft, color: history.current.color),
-            name: Self.name(from: base, to: draft)
+        let base = history.current
+        // The colour is carried over rather than defaulted: the tool writes its
+        // own field of the recipe and every other one comes from what the photo
+        // already is. Building a fresh `EditRecipe` here silently threw the grade
+        // away, and the rule is what stops the next tool doing the same to the crop.
+        return record(
+            CropTool.commit(crop, into: base),
+            unlessItIs: base,
+            named: Self.name(from: base.crop, to: crop)
         )
-        registerUndo()
-        refresh()
-        return true
     }
 
-    /// Throws the draft away. The committed recipe is untouched and no step is
-    /// recorded — Escape has to be able to cost nothing.
-    func cancel() {
-        draft = nil
-    }
-
-    // MARK: - Colour
-
-    /// Opens a colour change, starting from the colours the photo already has.
+    /// Records the colours being worked on as a single step, and lets the tool go.
     ///
-    /// Called when a slider is first touched. Opening one that is already open
-    /// leaves the draft where it is, so a drag that begins on one slider and ends
-    /// on another is still one step.
-    func beginColorSession() {
-        guard colorDraft == nil else { return }
-        colorDraft = history.current.color
-    }
-
-    func updateColorDraft(_ color: ColorAdjustments) {
-        guard colorDraft != nil else { return }
-        colorDraft = color
-    }
-
-    /// Records the change in progress as a single step, named after the sliders
-    /// it moved.
-    ///
-    /// - Returns: Whether anything was recorded. A drag that came back to where
-    ///   it started leaves nothing behind, so ⌘Z is not spent on a no-op.
+    /// - Returns: Whether anything was recorded. A drag that came back to where it
+    ///   started leaves nothing behind, so ⌘Z is not spent on a no-op.
     @discardableResult
-    func commitColor() -> Bool {
-        guard let colorDraft else { return false }
-        self.colorDraft = nil
+    func recordColour() -> Bool {
+        guard case .colour(let colour) = tool else { return false }
+        tool = .none
 
-        let base = history.current.color
-        guard colorDraft != base else { return false }
-
-        history.record(
-            EditRecipe(crop: history.current.crop, color: colorDraft),
-            name: Self.name(from: base, to: colorDraft)
+        let base = history.current
+        return record(
+            ColorTool.commit(colour, into: base),
+            unlessItIs: base,
+            named: Self.name(from: base.color, to: colour)
         )
+    }
+
+    /// Appends `recipe` as a step, unless the photo is already it.
+    ///
+    /// - Returns: Whether anything was recorded.
+    private func record(_ recipe: EditRecipe, unlessItIs base: EditRecipe, named name: EditStepName) -> Bool {
+        guard recipe != base else { return false }
+
+        history.record(recipe, name: name)
         registerUndo()
         refresh()
         return true
@@ -213,15 +259,13 @@ final class PhotoEditSession {
     /// crop mode steps the history and leaves the tool.
     private func stepBack() {
         history.undo()
-        draft = nil
-        colorDraft = nil
+        discard()
         refresh()
     }
 
     private func stepForward() {
         history.redo()
-        draft = nil
-        colorDraft = nil
+        discard()
         refresh()
     }
 
