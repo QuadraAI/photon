@@ -77,12 +77,21 @@ final class StagedPhotoView: MTKView {
     private let imageContext: CIContext
     private var image: CIImage?
 
-    /// The picture already on the drawable.
+    /// The picture already on the drawable, and the size it was drawn at.
     ///
     /// A frame with nothing new in it is a frame not worth rendering: the view
     /// draws on the display's clock, and most of those ticks arrive between two
     /// slider values rather than on one.
+    ///
+    /// The *size* is part of that, and forgetting it was a bug with two faces.
+    /// Opening the crop tool swaps the canvas from the crop to the whole photo,
+    /// and a quarter turn swaps which side is the width — either one resizes the
+    /// view, and therefore the drawable. Skipping the frame because the picture
+    /// had not changed left the old scale in place: the photo sat in a corner of
+    /// its own view with bare drawable around it, which reads as black bars, and
+    /// the overlay no longer lined up with the picture under it.
     private var drawn: CIImage?
+    private var drawnSize = CGSize.zero
 
     /// The queue the frame is presented on.
     ///
@@ -166,12 +175,14 @@ final class StagedPhotoView: MTKView {
     /// Waiting for a finished picture — which is what asking for pixels does —
     /// is the cost this view exists to avoid.
     private func drawPicture() {
-        let extent = image?.extent ?? .zero
-        guard let image, image !== drawn, extent.width > 0, extent.height > 0,
-              drawableSize.width > 0,
+        guard let image,
+              Self.isWorthDrawing(image, at: drawableSize, after: drawn, drawnAt: drawnSize),
               let drawable = currentDrawable,
               let commandBuffer = commandQueue?.makeCommandBuffer()
         else { return }
+
+        let extent = image.extent
+        guard extent.width > 0, extent.height > 0 else { return }
 
         // Put the picture where its own origin is, then fill the drawable with
         // it. Both steps earn their place: a crop is moved back to the origin and
@@ -193,6 +204,7 @@ final class StagedPhotoView: MTKView {
         commandBuffer.present(drawable)
         commandBuffer.commit()
         drawn = image
+        drawnSize = drawableSize
     }
 
     /// Draws a staged picture into a texture, in the space a display reads.
@@ -221,6 +233,22 @@ final class StagedPhotoView: MTKView {
             bounds: bounds,
             colorSpace: outputColorSpace
         )
+    }
+
+    /// Whether a frame is worth drawing: a new picture, or the same one at a
+    /// different size.
+    ///
+    /// Stated apart from the drawing so it can be held to, because getting it
+    /// wrong is invisible in every way except the one that matters — a picture
+    /// drawn at a size the view no longer has.
+    static func isWorthDrawing(
+        _ image: CIImage?,
+        at size: CGSize,
+        after drawn: CIImage?,
+        drawnAt drawnSize: CGSize
+    ) -> Bool {
+        guard let image, size.width > 0 else { return false }
+        return image !== drawn || size != drawnSize
     }
 
     /// How much a staged picture is scaled by to fill the drawable it is drawn in.

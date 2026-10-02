@@ -49,6 +49,24 @@ struct StagedPhotoViewTests {
         #expect(StagedPhotoView.scale(of: large, in: drawable) == 0.3)
     }
 
+    @Test("The same picture is drawn again when the drawable changes size")
+    func aResizedDrawableIsDrawnAgain() {
+        // Opening the crop tool swaps the canvas from the crop to the whole
+        // photo, and a quarter turn swaps which side is the width: either one
+        // resizes the view. A picture already drawn at the old size would be left
+        // at the old scale — sitting in a corner of its own view with bare
+        // drawable around it, which is the black bars, and no longer lining up
+        // with the crop overlay drawn over it.
+        let picture = picture(CGSize(width: 100, height: 100))
+        let small = CGSize(width: 200, height: 200)
+        let large = CGSize(width: 400, height: 400)
+
+        #expect(StagedPhotoView.isWorthDrawing(picture, at: large, after: picture, drawnAt: small))
+        #expect(StagedPhotoView.isWorthDrawing(picture, at: small, after: nil, drawnAt: .zero))
+        #expect(!StagedPhotoView.isWorthDrawing(picture, at: small, after: picture, drawnAt: small))
+        #expect(!StagedPhotoView.isWorthDrawing(picture, at: .zero, after: nil, drawnAt: .zero))
+    }
+
     @Test("A drawable with no size yet asks for no scaling")
     func anEmptyDrawableScalesByOne() {
         // Before layout the view has no size, and dividing by it would be a

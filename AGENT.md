@@ -18,7 +18,7 @@ Single multiplatform target (macOS + iPadOS). Non‑destructive photo editor. Sh
 App/{Models,Views,ViewModels,Services,Utilities,Extensions}/
 App/Views/Editor/            # the editor's own parts, split out of Views/Components
 Tests/{Unit,Integration,UI}/
-Tests/Photos/                # UI-test fixtures: stay on disk, never bundled
+Tests/Photos/                # fixtures: stay on disk, never bundled
 Resources/
 ```
 
@@ -88,10 +88,9 @@ Resources/
 
 Swift Testing (`import Testing`); migrate XCTest to `#expect` / `#require` where practical. `@MainActor` on main‑isolated tests. Protocol‑based mocks. Cover edit serialization, undo/redo, color preservation, export metadata, concurrency safety, accessibility traits. Snapshot tests for non‑trivial reusable views: render the view with `ImageRenderer`, compare against a PNG fixture committed under `Tests/`, on a tolerance rather than exactly, and fail by writing the new image out to be looked at. First‑party, because a third‑party snapshot library is a dependency this project does not take.
 
-**UI tests** (`Tests/UI`, target `PhotonUITests`) are XCTest — XCUITest has no Swift Testing support. They drive the *real* system open panel rather than injecting a folder, because Photon is sandboxed with only user-selected file access. Two consequences worth remembering:
+The fixture folder is `Tests/Photos`, addressed as a plain filesystem path derived from `#filePath` and **never** built into the test bundle — the app is sandboxed with only user-selected file access, and the open panel treats a bundle as a single file.
 
-- The fixture folder is `Tests/Photos`, addressed as a plain filesystem path derived from `#filePath`. It is **never** built into the test bundle: the open panel treats an app or test bundle as one file and refuses to navigate into it.
-- Commands go through the menu bar (`⌘O` for Open Folder), so a test does not care whether the app restored a remembered folder or is showing the welcome screen.
+There are no UI tests. Driving the app from another process cost more than it caught: the faults that actually shipped — a canvas drawn at the wrong size, and one drawn in the wrong colour space — were invisible to it, because a UI test can assert where a view *is* and not what it *looks like*. `Tests/Unit/Snapshots/` is where a drawing is held to its appearance now.
 
 ## Xcode MCP (DeepSeek Harness)
 

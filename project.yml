@@ -116,7 +116,7 @@ targets:
       iOS: "27.0"
       macOS: "27.0"
     sources:
-      # Narrowed from `Tests` so the UI tests in Tests/UI do not also compile
+      # Narrowed from `Tests` so nothing under Tests/ does compile
       # into this bundle.
       - path: Tests/Unit
       - path: Tests/Integration
@@ -141,50 +141,12 @@ targets:
         "TEST_HOST[sdk=iphone*]": "$(BUILT_PRODUCTS_DIR)/Photon.app/Photon"
         BUNDLE_LOADER: "$(TEST_HOST)"
 
-  PhotonUITests:
-    # UI tests drive the app from a separate process, so they use XCTest —
-    # XCUITest has no Swift Testing support.
-    type: bundle.ui-testing
-    supportedDestinations: [iOS, macOS]
-    deploymentTarget:
-      iOS: "27.0"
-      macOS: "27.0"
-    sources:
-      - path: Tests/UI
-      # The photo fixtures stay at a plain filesystem path and are deliberately
-      # NOT built into the bundle: the open panel treats an app or test bundle as
-      # a single file and will not navigate into one, so a bundled copy would be
-      # unreachable. `buildPhase: none` keeps them visible in the navigator.
-      - path: Tests/Photos
-        type: folder
-        buildPhase: none
-    dependencies:
-      - target: Photon
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.quadra.PhotonUITests
-        GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: Photon
-        TARGETED_DEVICE_FAMILY: "2"
-        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator macosx"
-
-        # Shadows the preset's "iPhone Developer" — see the note above.
-        CODE_SIGN_IDENTITY: "-"
-        "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Development"
-
-        # XcodeGen's `bundle.ui-testing` preset sets BUNDLE_LOADER to
-        # `$(TEST_HOST)`. A UI test bundle is not loaded into the app, so both
-        # are cleared rather than left to expand to something surprising.
-        TEST_HOST: ""
-        BUNDLE_LOADER: ""
-
 schemes:
   Photon:
     build:
       targets:
         Photon: all
         PhotonTests: [test]
-        PhotonUITests: [test]
     run:
       config: Debug
     test:
@@ -192,7 +154,6 @@ schemes:
       gatherCoverageData: true
       targets:
         - PhotonTests
-        - PhotonUITests
     profile:
       config: Release
     analyze:
