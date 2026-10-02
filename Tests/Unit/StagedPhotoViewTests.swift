@@ -67,6 +67,20 @@ struct StagedPhotoViewTests {
         #expect(!StagedPhotoView.isWorthDrawing(picture, at: .zero, after: nil, drawnAt: .zero))
     }
 
+    @Test("A drawable of a shape the picture is not is still covered by it")
+    func thePictureCoversAShapeItIsNot() {
+        // Mid-resize the view's shape is on its way from one aspect to another
+        // and is briefly neither. A picture scaled to *fit* would leave bare
+        // drawable down one side for the length of the animation, which is the
+        // black bars; covering it spills over the other two edges instead.
+        let image = picture(CGSize(width: 600, height: 400))
+        let drawable = CGSize(width: 400, height: 1000)
+        let scale = StagedPhotoView.scale(of: image, in: drawable)
+
+        #expect(scale * image.extent.width >= drawable.width)
+        #expect(scale * image.extent.height >= drawable.height)
+    }
+
     @Test("A drawable with no size yet asks for no scaling")
     func anEmptyDrawableScalesByOne() {
         // Before layout the view has no size, and dividing by it would be a

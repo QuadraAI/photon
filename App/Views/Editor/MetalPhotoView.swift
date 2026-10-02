@@ -184,13 +184,23 @@ final class StagedPhotoView: MTKView {
         let extent = image.extent
         guard extent.width > 0, extent.height > 0 else { return }
 
-        // Put the picture where its own origin is, then fill the drawable with
-        // it. Both steps earn their place: a crop is moved back to the origin and
-        // a turn is not, so the extent cannot be assumed to start at nothing.
+        // Put the picture where its own origin is, fill the drawable with it, and
+        // centre what spills over an edge. Each step earns its place: a crop is
+        // moved back to the origin and a turn is not, so the extent cannot be
+        // assumed to start at nothing; and the fill overflows by a few pixels
+        // whenever the drawable is not quite the picture's shape, which it is
+        // while the window is being resized.
         let scale = Self.scale(of: image, in: drawableSize)
+        let covered = CGSize(width: extent.width * scale, height: extent.height * scale)
         let placed = image
             .transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
             .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            .transformed(
+                by: CGAffineTransform(
+                    translationX: (drawableSize.width - covered.width) / 2,
+                    y: (drawableSize.height - covered.height) / 2
+                )
+            )
 
         Self.draw(
             placed,
@@ -258,9 +268,16 @@ final class StagedPhotoView: MTKView {
     /// the ratio between *those* two sizes, and not the display's scale. Scaling
     /// by the display's factor draws the preview two or three times the size of
     /// the view that holds it, which shows as a quarter of the photo in a corner.
+    ///
+    /// The *larger* of the two ratios, so the picture covers the drawable rather
+    /// than fitting inside it. While the window is being resized the view's shape
+    /// is on its way from one aspect to another and is briefly neither, and a
+    /// picture scaled to fit leaves bare drawable down one side for the length of
+    /// the animation — which is the black bars. Covering spills a few pixels over
+    /// an edge instead, which nothing can see.
     static func scale(of image: CIImage, in drawable: CGSize) -> CGFloat {
         let extent = image.extent
-        guard extent.width > 0, drawable.width > 0 else { return 1 }
-        return drawable.width / extent.width
+        guard extent.width > 0, extent.height > 0, drawable.width > 0, drawable.height > 0 else { return 1 }
+        return max(drawable.width / extent.width, drawable.height / extent.height)
     }
 }
