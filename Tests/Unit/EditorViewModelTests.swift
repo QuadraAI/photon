@@ -253,6 +253,10 @@ struct EditorViewModelTests {
 
         editor.setCropAspect(.fixed(width: 16, height: 9))
         editor.commitCropSession()
+        // The step lands with the picture it records — see
+        // `confirmingACropLandsWithThePicture` — so the toolbar hears about it a
+        // render later rather than a render early.
+        await editor.waitForCanvas()
         #expect(editor.canUndo)
         #expect(editor.undoName == .crop(.fixed(width: 16, height: 9)), "The button names what it will take back")
 
@@ -285,6 +289,7 @@ struct EditorViewModelTests {
 
         editor.setCropAspect(.fixed(width: 1, height: 1))
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
 
         #expect(editor.openTool == nil)
         #expect(editor.canUndo, "The work went into the history rather than being thrown away")
@@ -357,6 +362,7 @@ struct EditorViewModelTests {
         let editor = await editorWithCropOpen()
         editor.setCropAspect(.fixed(width: 1, height: 1))
         editor.commitCropSession()
+        await editor.waitForCanvas()
         #expect(editor.canUndo)
 
         await editor.load(.fixture(name: "Other"))
@@ -592,6 +598,65 @@ struct EditorViewModelTests {
         #expect(editor.canvasPicture === good, "The last good picture is better than none")
         #expect(editor.failedPhoto == nil)
         #expect(editor.decodedPhoto != nil)
+    }
+
+    @Test("Confirming a crop lands the tool with the picture it recorded")
+    func confirmingACropLandsWithThePicture() async {
+        // What the stutter was: the overlay, the panel and the undo mirror all
+        // moved first and the crop arrived a render later, so the user was shown
+        // the whole photo with nothing on it in between — for a raw file, several
+        // frames of it.
+        let renderer = StubPhotoEditor(delay: .milliseconds(40))
+        let editor = makeEditor(renderer: renderer)
+        await editor.load(.fixture())
+        await editor.select(.fixture())
+        editor.toggleTool(.crop)
+        editor.setCropInset(.left, to: 0.25)
+        let committed = renderer.renderedRecipes.count
+
+        editor.commitCropSession()
+
+        // The render is 40 ms away, and nothing has moved yet.
+        #expect(editor.isCropping, "The overlay came off the photo before the crop was ready")
+        #expect(editor.openTool == .crop, "The panel closed over the picture the crop is not on yet")
+        #expect(editor.canUndo == false, "The step lands with the picture it records")
+
+        await editor.waitForCanvas()
+
+        #expect(renderer.renderedRecipes.count == committed + 1, "One render for the crop being confirmed, not two")
+        #expect(editor.isCropping == false)
+        #expect(editor.openTool == nil)
+        #expect(editor.canUndo, "The step was recorded")
+        #expect(editor.undoName == .crop(nil))
+        #expect(editor.canvasRecipe?.crop.isIdentity == false, "The canvas is showing the crop")
+    }
+
+    @Test("Cancelling a crop lands the tool with the picture it goes back to")
+    func cancellingACropLandsWithThePicture() async {
+        // The same bargain on the way out: the crop the photo already has is
+        // rendered while the overlay is still on the photo being worked on.
+        let renderer = StubPhotoEditor(delay: .milliseconds(40))
+        let editor = makeEditor(renderer: renderer)
+        await editor.load(.fixture())
+        await editor.select(.fixture())
+        editor.toggleTool(.crop)
+        editor.setCropInset(.left, to: 0.25)
+        editor.commitCropSession()
+        await editor.waitForCanvas()
+
+        editor.toggleTool(.crop)
+        editor.setCropInset(.top, to: 0.4)
+        editor.abandonCropSession()
+
+        #expect(editor.isCropping, "The overlay came off before the picture it goes back to was ready")
+
+        await editor.waitForCanvas()
+
+        #expect(editor.isCropping == false)
+        #expect(editor.openTool == nil)
+        #expect(editor.canUndo, "The crop that was already committed is still there to take back")
+        #expect(editor.undoName == .crop(nil), "And the change just thrown away cost no step")
+        #expect(editor.canvasRecipe?.crop.isIdentity == false, "The canvas is back on the crop the photo has")
     }
 
     @Test("Resetting the colours is one step, and costs nothing when there is nothing to reset")
