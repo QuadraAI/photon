@@ -12,6 +12,12 @@ import SwiftUI
 struct MediaSidebar: View {
     @Environment(EditorViewModel.self) private var editor
 
+    /// The folder that is open, as the window's title gives it.
+    ///
+    /// Handed in rather than read from the environment: the sidebar is a pane of
+    /// the editor, and the folder is the editor's, not something it owns.
+    let folderName: String
+
     /// The folders the user has opened, by their path. Kept here rather than in
     /// the tree, so a filter or another folder does not close them.
     @State private var expanded: Set<String> = []
@@ -20,6 +26,7 @@ struct MediaSidebar: View {
         VStack(spacing: 0) {
             if editor.foundCount > 0 {
                 filterField
+                header
             }
             content
         }
@@ -27,35 +34,46 @@ struct MediaSidebar: View {
 
     // MARK: - Header
 
-    /// A section header inside the list rather than a bar above it, so the rows
-    /// line up with it. It carries a material because it stays pinned while the
-    /// rows scroll under it.
+    /// The folder that is open, and how many of its photos are on show.
+    ///
+    /// A bar above the list rather than a header inside it, so it holds its place
+    /// while the rows scroll past underneath — the same way the filter field above
+    /// it does. A section header pinned to the top of a scrolling list is a thing
+    /// the rows move under; this is the answer to "what am I looking at", and it
+    /// should no more travel than the name of the folder in the window's title.
+    ///
+    /// It carries the count rather than the list, so a filter reads as having
+    /// done something.
     private var header: some View {
         HStack(spacing: 6) {
-            Text("editor.sidebar.title")
+            Text(folderName)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                // The end of a folder's name is the part that tells it apart:
+                // every frame in a card is called DSC0…, and the last few
+                // characters are what differ.
+                .truncationMode(.middle)
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 6)
 
-            // Follows the filter, so it doubles as feedback that the filter is
-            // doing something.
-            //
             // Drawn in a box the width of the window's sidebar toggle, pushed to
             // the same trailing edge, so the count reads as belonging to the
             // button above it — a number of any width stays on the button's axis.
             // The box is a plain container: put the identifier on it instead of
-            // on the `Text` and the section header's row takes it, leaving the
-            // count without an element of its own.
+            // on the `Text` and the header's row takes it, leaving the count
+            // without an element of its own.
             HStack(spacing: 0) {
                 Text(editor.matches.count, format: .number)
+                    .font(.subheadline)
                     .monospacedDigit()
+                    .foregroundStyle(.secondary)
                     .accessibilityIdentifier("editor.sidebar.count")
             }
             .frame(minWidth: AppLayout.sidebarToggleWidth, alignment: .center)
             .padding(.trailing, AppLayout.sidebarCountTrailingInset)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(.bar)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
     }
 
     // MARK: - Content
@@ -133,17 +151,13 @@ struct MediaSidebar: View {
         // It lists a tree, because a `List` lays out every row it is handed:
         // folded up, a folder of thousands is a single row.
         List(selection: selectedPhoto) {
-            Section {
-                ForEach(editor.nodes) { node in
-                    switch node {
-                    case .folder(let folder):
-                        FolderRows(expanded: $expanded, folder: folder)
-                    case .photo(let photo):
-                        PhotoRow(photo: photo).listed
-                    }
+            ForEach(editor.nodes) { node in
+                switch node {
+                case .folder(let folder):
+                    FolderRows(expanded: $expanded, folder: folder)
+                case .photo(let photo):
+                    PhotoRow(photo: photo).listed
                 }
-            } header: {
-                header
             }
         }
         .listStyle(.sidebar)
@@ -238,7 +252,7 @@ private struct FolderRows: View {
             Text(folder.photoCount, format: .number)
                 .font(.caption)
                 .monospacedDigit()
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("editor.sidebar.folder.\(folder.path)")

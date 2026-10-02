@@ -48,7 +48,7 @@ struct EditorView: View {
 
     var body: some View {
         NavigationSplitView(columnVisibility: columnVisibility) {
-            MediaSidebar()
+            MediaSidebar(folderName: folder.url.lastPathComponent)
                 .navigationSplitViewColumnWidth(
                     min: AppLayout.mediaSidebarWidthRange.lowerBound,
                     ideal: AppLayout.mediaSidebarWidth,
