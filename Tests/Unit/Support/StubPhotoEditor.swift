@@ -62,6 +62,16 @@ final class StubPhotoEditor: PhotoEditing, Sendable {
         drafts.withLock { $0 }
     }
 
+    /// Makes every render from here on fail.
+    ///
+    /// The engine failing on the way *back* — a file pulled out of a folder, a
+    /// decode that runs out of memory — is a different thing from a file that
+    /// could never be read, and a test that holds a picture on the canvas and
+    /// then breaks the engine under it needs to say when.
+    func failRenders(_ error: PhotoRenderError = .unreadable) {
+        failure.withLock { $0 = error }
+    }
+
     func draft(for url: URL, maxPixelSize: Int) async throws(PhotoRenderError) -> CGImage {
         drafts.withLock { $0.append(url) }
 

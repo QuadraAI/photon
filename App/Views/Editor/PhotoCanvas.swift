@@ -76,11 +76,13 @@ struct PhotoCanvas: View {
     /// image is deliberately kept out of the accessibility tree, which would
     /// leave VoiceOver — and the UI tests — with nothing to find.
     private func picture(_ photo: RenderedPhoto) -> some View {
-        // While the crop tool is open the canvas shows the whole photo with the
-        // crop drawn over it, so what is being cropped away stays on screen and
-        // the user can drag a handle back out past it. Every other time it shows
-        // the crop itself.
-        let image = editor.isCropping ? (editor.sessionBase ?? photo.base) : photo.image
+        // One picture, and the canvas draws it. While the crop tool is open the
+        // view model puts the whole photo up — the region being cropped away stays
+        // on screen so a handle can be dragged back out over it — and every other
+        // time it puts up the crop itself. The canvas used to choose between two
+        // pictures of its own, and chose the ungraded one for the moment the crop
+        // tool opened over a grade.
+        let image = photo.image
         let imageSize = image.extent.size
         let name = editor.selection?.name ?? ""
 

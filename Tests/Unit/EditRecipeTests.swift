@@ -181,4 +181,38 @@ struct EditRecipeTests {
             #expect(decoded == ratio, "\(ratio) did not come back")
         }
     }
+
+    // MARK: - What the engine would draw
+
+    @Test("Two recipes that differ only in the crop's shape are the same picture")
+    func theCropShapeIsNotDrawn() {
+        // `aspect` constrains a drag; it is not in the pixels. The canvas asks
+        // this before rendering, because a panel closing over a crop nobody moved
+        // asks for the picture that is already up — and the tool's own recipe for
+        // the photo whole names a free crop where the committed one names the
+        // photo's own shape.
+        let whole = EditRecipe(crop: Crop(rect: CropGeometry.unitFrame, aspect: .free, rotation: .none))
+        let same = EditRecipe(crop: Crop(rect: CropGeometry.unitFrame, aspect: .original, rotation: .none))
+
+        #expect(whole != same, "They are not the same value, which is why this is asked separately")
+        #expect(whole.rendersTheSame(as: same))
+        #expect(same.rendersTheSame(as: whole))
+    }
+
+    @Test("A turn, a crop or a grade is a different picture")
+    func everythingDrawnIsCompared() {
+        let rect = CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+        let base = EditRecipe(crop: Crop(rect: CropGeometry.unitFrame, aspect: .free, rotation: .none))
+        let cropped = EditRecipe(crop: Crop(rect: rect, aspect: .free, rotation: .none))
+        let turned = EditRecipe(crop: Crop(rect: CropGeometry.unitFrame, aspect: .free, rotation: .clockwise))
+
+        var graded = ColorAdjustments()
+        graded.saturation = 0.5
+        let gradedRecipe = EditRecipe(crop: Crop(rect: CropGeometry.unitFrame, aspect: .free, rotation: .none), color: graded)
+
+        #expect(!base.rendersTheSame(as: cropped))
+        #expect(!base.rendersTheSame(as: turned))
+        #expect(!base.rendersTheSame(as: gradedRecipe))
+        #expect(base.rendersTheSame(as: base))
+    }
 }

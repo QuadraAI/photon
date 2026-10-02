@@ -38,4 +38,18 @@ nonisolated struct EditRecipe: Equatable, Sendable, Codable {
 
     /// Whether this recipe asks for the file's own pixels, whole.
     var isIdentity: Bool { crop.isIdentity && color.isIdentity }
+
+    /// Whether this recipe asks for the same picture as `other`.
+    ///
+    /// The rect, the turn and the colours are what the engine renders;
+    /// ``Crop/aspect`` only constrains a drag, so two recipes that differ in it
+    /// are the same picture. That is what lets the canvas tell whether the picture
+    /// it is showing is the one being asked for — a panel closing over a crop
+    /// nobody moved asks for the picture that is already up, and rendering it
+    /// again is a frame of work for no frame of difference.
+    func rendersTheSame(as other: EditRecipe) -> Bool {
+        crop.rect == other.crop.rect
+            && crop.rotation == other.crop.rotation
+            && color == other.color
+    }
 }

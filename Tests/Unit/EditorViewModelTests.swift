@@ -429,21 +429,34 @@ struct EditorViewModelTests {
         #expect(editor.undoName == .color(.vibrance))
     }
 
-    @Test("A colour change with the crop tool shut renders no working picture")
-    func aColourChangeWithoutTheOverlayRendersNoWorkingPicture() async {
-        // The overlay's picture is only ever looked at while the overlay is on
-        // the canvas — that is the only branch that reads it — so rendering one
-        // on every colour commit was a preview's worth of work, and of pixels,
-        // for nobody.
-        let editor = await editorWithColorOpen()
+    @Test("A colour change with the crop tool shut asks for no whole-photo picture")
+    func aColourChangeWithoutTheOverlayRendersNoWholePhoto() async {
+        // The crop tool's picture is only ever looked at while the tool is open,
+        // so rendering one on every colour commit was a preview's worth of work,
+        // and of pixels, for nobody.
+        let renderer = StubPhotoEditor()
+        let editor = makeEditor(renderer: renderer)
+        await editor.load(.fixture())
+        await editor.select(.fixture())
+        editor.toggleTool(.crop)
+        editor.setCropInset(.left, to: 0.25)
+        editor.commitCropSession()
+        await editor.waitForCanvas()
 
+        let before = renderer.requestedURLs.count
+        editor.toggleTool(.color)
         editor.beginColorChange()
         editor.setSaturation(0.5)
         editor.endColorChange()
         await editor.waitForCanvas()
 
+        let asked = renderer.renderedRecipes.dropFirst(before)
         #expect(editor.isCropping == false)
-        #expect(editor.sessionBase == nil, "A working picture was rendered with no overlay to draw it")
+        #expect(asked.contains { $0.color.saturation == 0.5 }, "The grade still reaches the canvas")
+        #expect(
+            asked.allSatisfy { !$0.crop.isIdentity },
+            "The whole photo was rendered with no overlay to draw it on"
+        )
     }
 
     @Test("The crop overlay is drawn over the grade rather than over the file")
@@ -462,15 +475,123 @@ struct EditorViewModelTests {
         editor.toggleTool(.crop)
         await editor.waitForCanvas()
 
-        #expect(editor.sessionBase != nil, "The overlay has nothing to draw over")
+        #expect(editor.isCropping)
+        #expect(editor.canvasRecipe?.crop.isIdentity == true, "The overlay sits on the photo whole")
+        #expect(editor.canvasRecipe?.color.saturation == 0.5, "And on the grade rather than on the file's pixels")
+        #expect(editor.canvasPicture?.extent.isEmpty == false, "A staged picture is laid out by its extent")
+    }
+
+    @Test("The crop tool never asks the engine for the photo without its grade")
+    func theCropToolNeverAsksForTheUngradedPhoto() async {
+        // The canvas used to reach for the file's own pixels the moment the tool
+        // opened — which is *ungraded* — and put the graded picture up a render
+        // later. That swap is the flash: the photo as it arrived, at the moment
+        // the user asked to look closely at the photo as they had made it.
+        let renderer = StubPhotoEditor()
+        let editor = makeEditor(renderer: renderer)
+        await editor.load(.fixture())
+        await editor.select(.fixture())
+        editor.toggleTool(.crop)
+        editor.setCropInset(.left, to: 0.25)
+        editor.commitCropSession()
+        await editor.waitForCanvas()
+
+        editor.toggleTool(.color)
+        editor.beginColorChange()
+        editor.setSaturation(0.5)
+        editor.endColorChange()
+        await editor.waitForCanvas()
+
+        let before = renderer.requestedURLs.count
+        editor.toggleTool(.crop)
+        await editor.waitForCanvas()
+
+        let asked = renderer.renderedRecipes.dropFirst(before)
         #expect(
-            editor.sessionBase?.extent.isEmpty == false,
-            "A staged picture is laid out by its extent, so an empty one would draw nothing"
+            asked.contains { $0.crop.isIdentity && $0.color.saturation == 0.5 },
+            "The whole photo was not rendered in the grade the user is looking at it in"
         )
         #expect(
-            renderer.renderedRecipes.contains { $0.crop.isIdentity && $0.color.saturation == 0.5 },
-            "The overlay was handed a picture with the crop taken out but not the colour"
+            asked.allSatisfy { !$0.color.isIdentity },
+            "A picture of the photo as it arrived was rendered for the overlay"
         )
+    }
+
+    @Test("The canvas keeps the picture it has until the crop tool's render lands")
+    func nothingIsPublishedUntilTheRenderLands() async {
+        // What step B removed: a canvas deciding for itself that the moment the
+        // crop tool opens it should be showing the file's own pixels. A picture
+        // swapped for another and back is a flash, and the picture that was
+        // already up is the one the user was looking at.
+        let renderer = StubPhotoEditor(delay: .milliseconds(40))
+        let editor = await editorWithColorOpen(renderer: renderer)
+        editor.beginColorChange()
+        editor.setSaturation(0.5)
+        editor.endColorChange()
+        await editor.waitForCanvas()
+
+        editor.toggleTool(.crop)
+        editor.setCropInset(.left, to: 0.25)
+        editor.commitCropSession()
+        await editor.waitForCanvas()
+        let cropped = editor.canvasPicture
+        #expect(editor.canvasRecipe?.crop.isIdentity == false, "The canvas is showing the crop")
+
+        // Reopening the tool asks for the whole photo, which is a render away.
+        editor.toggleTool(.crop)
+
+        #expect(editor.canvasPicture === cropped, "The canvas reached for another picture before this one was ready")
+
+        await editor.waitForCanvas()
+        #expect(editor.canvasPicture !== cropped, "The whole photo never arrived")
+        #expect(editor.canvasRecipe?.crop.isIdentity == true)
+        #expect(editor.canvasRecipe?.color.saturation == 0.5)
+    }
+
+    @Test("Opening the crop tool on a photo that only has a crop costs no render")
+    func theFileItsOwnPixelsArePublishedWithoutRendering() async {
+        // The whole photo *is* the file's own pixels when there is nothing turned
+        // and nothing graded, and the decode is already in hand — so the tool
+        // opens on the picture that is already there rather than on a placeholder
+        // while a render of the same thing arrives.
+        let renderer = StubPhotoEditor()
+        let editor = makeEditor(renderer: renderer)
+        await editor.load(.fixture())
+        await editor.select(.fixture())
+        editor.toggleTool(.crop)
+        editor.setCropInset(.left, to: 0.25)
+        editor.commitCropSession()
+        await editor.waitForCanvas()
+        let before = renderer.requestedURLs.count
+
+        editor.toggleTool(.crop)
+
+        #expect(renderer.requestedURLs.count == before, "The picture asked for was one already in hand")
+        #expect(editor.isCropping)
+        #expect(editor.canvasRecipe?.crop.isIdentity == true, "The overlay is on the photo whole")
+        #expect(editor.canvasPicture?.extent.isEmpty == false)
+    }
+
+    @Test("A render that fails leaves the last good picture on the canvas")
+    func aFailedReRenderKeepsTheLastPicture() async {
+        // An engine that fails on the way *back* — a file pulled out of a folder,
+        // a decode that runs out of memory — is not a reason to take the photo off
+        // the canvas. Only a photo with nothing on the canvas at all is.
+        let renderer = StubPhotoEditor()
+        let editor = await editorWithColorOpen(renderer: renderer)
+        editor.beginColorChange()
+        editor.setSaturation(0.5)
+        editor.endColorChange()
+        await editor.waitForCanvas()
+        let good = editor.canvasPicture
+
+        renderer.failRenders()
+        editor.setSaturation(0.8)
+        await editor.waitForCanvas()
+
+        #expect(editor.canvasPicture === good, "The last good picture is better than none")
+        #expect(editor.failedPhoto == nil)
+        #expect(editor.decodedPhoto != nil)
     }
 
     @Test("Resetting the colours is one step, and costs nothing when there is nothing to reset")
@@ -1023,31 +1144,6 @@ struct EditorViewModelTests {
         #expect(renderer.renderedRecipes.last?.crop.isIdentity == false, "Turned but not cropped")
     }
 
-    @Test("The overlay's working picture is dropped when the tool closes")
-    func theWorkingPictureIsDropped() async {
-        // A turn is a whole photo's worth of pixels, so once there is one it is
-        // held — and let go with the tool.
-        let editor = await editorWithCropOpen()
-        editor.rotateCrop(clockwise: true)
-        await editor.waitForCanvas()
-        #expect(editor.sessionBase != nil)
-
-        editor.abandonCropSession()
-
-        #expect(editor.sessionBase == nil, "Held for nothing once the tool is shut")
-    }
-
-    @Test("An unturned photo is not held twice over")
-    func anUnturnedPhotoNeedsNoSeparateBase() async {
-        // Nothing to turn, so nothing is held: the canvas falls back to the
-        // photo's own untaken frame, which for an unturned photo is already the
-        // picture the overlay wants. A second copy of it would be a whole photo's
-        // worth of memory for no difference on screen.
-        let editor = await editorWithCropOpen()
-
-        #expect(editor.sessionBase == nil)
-    }
-
     // MARK: - Helpers
 
     /// An editor with a photo selected and the crop tool open on it.
@@ -1092,6 +1188,23 @@ private extension EditorViewModel {
     /// The photo the canvas has decoded.
     var decodedPhoto: PhotoItem? {
         if case .ready(let photo, _) = canvas { return photo }
+        return nil
+    }
+
+    /// The picture the canvas is drawing.
+    ///
+    /// Read for what it is rather than for what it looks like: the tests that care
+    /// about *when* a picture is published compare the one that is up before with
+    /// the one that is up after, and a staged picture is a reference, so `===`
+    /// answers that without rendering anything.
+    var canvasPicture: CIImage? {
+        if case .ready(_, let photo) = canvas { return photo.image }
+        return nil
+    }
+
+    /// What the picture on the canvas was made from.
+    var canvasRecipe: EditRecipe? {
+        if case .ready(_, let photo) = canvas { return photo.recipe }
         return nil
     }
 
