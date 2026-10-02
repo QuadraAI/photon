@@ -73,7 +73,7 @@ nonisolated final class EditorUITests: EditorUITestCase, @unchecked Sendable {
             "The empty canvas is not centred on the window"
         )
 
-        for name in ["crop", "light", "color", "details", "presets"] {
+        for name in ["crop", "light", "color", "presets"] {
             XCTAssertTrue(tool(name).exists, "The \(name) tool is missing from the rail")
         }
         XCTAssertNil(toolPanelTitle, "No tool panel should be open to begin with")
@@ -277,6 +277,112 @@ nonisolated final class EditorUITests: EditorUITestCase, @unchecked Sendable {
             "Undo left the canvas at \(canvasAspectRatio)"
         )
         XCTAssertFalse(undo.isEnabled, "The only step was taken back, so there is nothing left to undo")
+    }
+
+    /// The colour tool: the panel offers the bands, a slider moves the value the
+    /// panel reports, and ⌘Z takes the change away again.
+    ///
+    /// The sliders are drawn rather than borrowed, so this is also what holds the
+    /// hand-built control to being a control: it is one element of the right kind
+    /// — `app.sliders` finds it, which is what VoiceOver adjusts — it reports the
+    /// number the panel draws beside it, and a click along its track lands the
+    /// value where it was clicked rather than somewhere of its own choosing.
+    ///
+    /// A click rather than a drag, and deliberately. A click is the same gesture
+    /// the pointer makes — the control's gesture begins on mouse-down, so a click
+    /// is a drag of no distance — where a synthesized long press followed by a
+    /// drag does not reach it, and `adjust(toNormalizedSliderPosition:)` cannot
+    /// drive a SwiftUI slider on macOS at all: it asks for an orientation
+    /// attribute the framework does not publish.
+    @MainActor
+    func testTheColourPanelReportsTheGradeItMade() {
+        row("alpha.png").click()
+        XCTAssertTrue(
+            app.images["editor.canvas.image"].waitForExistence(timeout: 30),
+            "The photo never reached the canvas"
+        )
+
+        tool("color").click()
+        XCTAssertTrue(waitForPanelTitle("Color"), "The colour tool did not open its panel")
+
+        // The eight bands, in the mode the panel opens on. A slider reports the
+        // number the panel draws beside it, which for these is whole percents.
+        let yellow = app.sliders["tool.color.band.yellow.saturation"]
+        XCTAssertTrue(yellow.waitForExistence(timeout: 10), "The yellow band has no slider")
+        XCTAssertEqual(number(yellow), 0, "A photo nothing has been done to reads as neutral")
+
+        // Four fifths of the way along the control. The thumb travels within its
+        // own width, so that is a shade past four fifths of the range.
+        yellow.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).click()
+
+        let clicked = number(yellow)
+        XCTAssertEqual(
+            clicked,
+            64,
+            accuracy: 6,
+            "Clicking four fifths along the yellow track landed it at \(clicked)"
+        )
+
+        // And the arrow keys move it, which is what the control takes focus for
+        // — the path Full Keyboard Access and Switch Control need.
+        app.typeKey(.rightArrow, modifierFlags: [])
+        app.typeKey(.rightArrow, modifierFlags: [])
+
+        XCTAssertEqual(
+            number(yellow),
+            clicked + 2,
+            accuracy: 2,
+            "Two arrow keys moved the slider from \(clicked) to \(number(yellow))"
+        )
+
+        let undo = app.buttons["editor.toolbar.undo"]
+        XCTAssertTrue(undo.isEnabled, "Undo is disabled after a colour change")
+        XCTAssertTrue(
+            undo.label.contains("Saturation"),
+            "The undo button reads \"\(undo.label)\", which does not name the slider that moved"
+        )
+
+        app.typeKey("z", modifierFlags: .command)
+
+        XCTAssertEqual(number(yellow), 0, "Undo left the slider where it was")
+        XCTAssertFalse(undo.isEnabled, "The only step was taken back, so there is nothing left to undo")
+    }
+
+    /// What a slider is set to, as a number.
+    ///
+    /// A number rather than a string: it is what a slider's accessibility value
+    /// is, and it is the figure the panel draws beside the track.
+    @MainActor
+    private func number(_ element: XCUIElement) -> Double {
+        (element.value as? NSNumber)?.doubleValue ?? .nan
+    }
+
+    /// The mode picker moves the same eight bands from one of the three things
+    /// they can change to another.
+    @MainActor
+    func testTheColourPanelSwitchesModes() {
+        row("alpha.png").click()
+        XCTAssertTrue(app.images["editor.canvas.image"].waitForExistence(timeout: 30))
+
+        tool("color").click()
+        XCTAssertTrue(waitForPanelTitle("Color"))
+
+        let saturation = app.sliders["tool.color.band.yellow.saturation"]
+        XCTAssertTrue(saturation.waitForExistence(timeout: 10), "The panel does not open on saturation")
+
+        let picker = app.menuButtons["tool.color.channel"]
+        XCTAssertTrue(picker.exists, "The panel offers no mode picker")
+        XCTAssertEqual(picker.value as? String, "Saturation", "The picker does not say which mode it is on")
+
+        picker.click()
+        app.menuItems["Hue"].click()
+
+        XCTAssertTrue(
+            app.sliders["tool.color.band.yellow.hue"].waitForExistence(timeout: 10),
+            "Switching to hue did not hand the band rows over to it"
+        )
+        XCTAssertFalse(saturation.exists, "The rows are still the saturation ones")
+        XCTAssertEqual(picker.value as? String, "Hue", "The picker still says it is on saturation")
     }
 
     /// The crop is operable, and readable, without a pointer.

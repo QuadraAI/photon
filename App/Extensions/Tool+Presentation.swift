@@ -15,18 +15,20 @@ extension Tool {
         case .crop: "tool.crop"
         case .light: "tool.light"
         case .color: "tool.color"
-        case .details: "tool.details"
         case .presets: "tool.presets"
         }
     }
 
     /// SF Symbol for the rail.
+    ///
+    /// The colour tool wears the details tool's filters, which is where the
+    /// merged tool's icon came from: two overlapping discs say "adjust colour"
+    /// better than a palette did, and it is the icon the rail already had.
     var symbolName: String {
         switch self {
         case .crop: "crop.rotate"
         case .light: "sun.max"
-        case .color: "paintpalette"
-        case .details: "camera.filters"
+        case .color: "camera.filters"
         case .presets: "wand.and.stars"
         }
     }

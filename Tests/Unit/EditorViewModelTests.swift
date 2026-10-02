@@ -364,6 +364,159 @@ struct EditorViewModelTests {
         #expect(editor.canRedo == false)
     }
 
+    // MARK: - Colour
+
+    @Test("Opening the colour tool is not an edit on its own")
+    func openingTheColourToolCostsNothing() async {
+        let editor = await editorWithColorOpen()
+
+        #expect(editor.openTool == .color)
+        #expect(editor.colorAdjustments.isIdentity)
+        #expect(editor.canUndo == false, "A panel nobody has touched has not changed the photo")
+    }
+
+    @Test("A slider drag reaches the canvas, and is one step when it ends")
+    func aSliderDragIsOneStep() async {
+        let renderer = StubPhotoEditor()
+        let editor = await editorWithColorOpen(renderer: renderer)
+
+        editor.beginColorChange()
+        for step in 1...20 {
+            editor.setSaturation(Double(step) / 40)
+        }
+        await editor.waitForCanvas()
+
+        #expect(editor.colorAdjustments.saturation == 0.5, "The panel shows the drag in progress")
+        #expect(
+            renderer.renderedRecipes.contains { $0.color.saturation == 0.5 },
+            "The drag never reached the canvas"
+        )
+        #expect(editor.canUndo == false, "A drag in progress is not a step yet")
+
+        editor.endColorChange()
+
+        #expect(editor.canUndo)
+        #expect(editor.undoName == .color(.saturation))
+        #expect(editor.colorAdjustments.saturation == 0.5, "Committing keeps what was dragged")
+    }
+
+    @Test("A colour change nobody closed is still committed when the tool shuts")
+    func shuttingTheToolCommitsAColourChange() async {
+        // What a change made from the keyboard or VoiceOver looks like: values
+        // arrive with no drag to end them, so leaving the tool is what says the
+        // change is finished.
+        let editor = await editorWithColorOpen()
+
+        editor.beginColorChange()
+        editor.setBand(.luminance, .green, to: -0.3)
+        editor.toggleTool(.color)
+
+        #expect(editor.openTool == nil)
+        #expect(editor.canUndo, "The change went into the history rather than being thrown away")
+        #expect(editor.undoName == .color(.luminance))
+    }
+
+    @Test("Switching to the crop tool commits the colour change in progress")
+    func switchingToolsCommitsAColourChange() async {
+        let editor = await editorWithColorOpen()
+
+        editor.beginColorChange()
+        editor.setVibrance(0.6)
+        editor.toggleTool(.crop)
+
+        #expect(editor.openTool == .crop)
+        #expect(editor.undoName == .color(.vibrance))
+    }
+
+    @Test("A colour change with the crop tool shut renders no working picture")
+    func aColourChangeWithoutTheOverlayRendersNoWorkingPicture() async {
+        // The overlay's picture is only ever looked at while the overlay is on
+        // the canvas — that is the only branch that reads it — so rendering one
+        // on every colour commit was a preview's worth of work, and of pixels,
+        // for nobody.
+        let editor = await editorWithColorOpen()
+
+        editor.beginColorChange()
+        editor.setSaturation(0.5)
+        editor.endColorChange()
+        await editor.waitForCanvas()
+
+        #expect(editor.isCropping == false)
+        #expect(editor.sessionBase == nil, "A working picture was rendered with no overlay to draw it")
+    }
+
+    @Test("The crop overlay is drawn over the grade rather than over the file")
+    func theCropOverlayShowsTheGrade() async {
+        // Graded and then cropped, which is the order a photographer works in —
+        // so the picture under the crop handles has to be the graded one, not the
+        // file's own pixels with the colour missing from them.
+        let renderer = StubPhotoEditor()
+        let editor = await editorWithColorOpen(renderer: renderer)
+
+        editor.beginColorChange()
+        editor.setSaturation(0.5)
+        editor.endColorChange()
+        await editor.waitForCanvas()
+
+        editor.toggleTool(.crop)
+        await editor.waitForCanvas()
+
+        #expect(editor.sessionBase != nil, "The overlay has nothing to draw over")
+        #expect(
+            renderer.renderedRecipes.contains { $0.crop.isIdentity && $0.color.saturation == 0.5 },
+            "The overlay was handed a picture with the crop taken out but not the colour"
+        )
+    }
+
+    @Test("Resetting the colours is one step, and costs nothing when there is nothing to reset")
+    func resettingTheColours() async {
+        let editor = await editorWithColorOpen()
+
+        editor.resetColor()
+        #expect(editor.canUndo == false, "There was nothing to take back")
+
+        editor.beginColorChange()
+        editor.setSaturation(0.5)
+        editor.setColorCast(0.5)
+        editor.endColorChange()
+
+        editor.resetColor()
+
+        #expect(editor.colorAdjustments.isIdentity)
+        #expect(editor.undoName == .color(.all), "Reset moved more than one slider, so it is not one of them")
+    }
+
+    @Test("Undoing a colour step brings the grade back, and redoing takes it away again")
+    func undoingAColourStepBringsItBack() async {
+        let editor = await editorWithColorOpen()
+        editor.beginColorChange()
+        editor.setSaturation(0.5)
+        editor.endColorChange()
+
+        editor.undo()
+
+        #expect(editor.colorAdjustments.isIdentity)
+        #expect(editor.canRedo)
+
+        editor.redo()
+
+        #expect(editor.colorAdjustments.saturation == 0.5)
+    }
+
+    @Test("Undoing a colour step leaves the panel open on the colours it restored")
+    func undoingAColourStepLeavesThePanelOpen() async {
+        let editor = await editorWithColorOpen()
+        editor.beginColorChange()
+        editor.setSaturation(0.5)
+        editor.endColorChange()
+
+        editor.undo()
+
+        #expect(editor.openTool == .color, "The panel is a tool rather than a session: nothing about it is finished")
+        #expect(editor.colorAdjustments.isIdentity)
+        #expect(editor.canRedo)
+    }
+
     // MARK: - Filtering
 
     @Test("A filter that is empty, or only whitespace, shows every photo")
@@ -846,6 +999,17 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.crop)
+        return editor
+    }
+
+    /// An editor with a photo selected and the colour tool open on it.
+    private func editorWithColorOpen(
+        renderer: StubPhotoEditor = StubPhotoEditor()
+    ) async -> EditorViewModel {
+        let editor = makeEditor(renderer: renderer)
+        await editor.load(.fixture())
+        await editor.select(.fixture())
+        editor.toggleTool(.color)
         return editor
     }
 

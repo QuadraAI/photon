@@ -29,6 +29,18 @@ extension EditStepName {
             case .counterclockwise: Text("editor.history.rotate.left")
             case .upsideDown: Text("editor.history.rotate.half")
             }
+        case .color(let change):
+            // The panel's own labels, which is the point: the menu says "Undo
+            // Saturation" because that is what the slider the user moved is
+            // called, not because a second set of names agrees with it.
+            switch change {
+            case .saturation, .bandSaturation: Text("tool.color.saturation")
+            case .vibrance: Text("tool.color.vibrance")
+            case .colorCast: Text("tool.color.colorCast")
+            case .hue: Text("tool.color.channel.hue")
+            case .luminance: Text("tool.color.channel.luminance")
+            case .all: Text("tool.color")
+            }
         }
     }
 

@@ -170,6 +170,162 @@ struct PhotoEditSessionTests {
         #expect(fromTurn.undoName == .reset)
     }
 
+    // MARK: - The colour session
+
+    @Test("Opening a colour change starts from the colours the photo already has")
+    func colourStartsFromTheCommittedValue() {
+        var committed = ColorAdjustments()
+        committed.vibrance = 0.4
+        let session = PhotoEditSession(photo: .fixture(), recipe: EditRecipe(crop: .identity, color: committed))
+
+        session.beginColorSession()
+
+        #expect(session.displayedColor == committed)
+        #expect(session.colorDraft == committed)
+    }
+
+    @Test("A colour change outside a session is ignored")
+    func colourOutsideASessionIsIgnored() {
+        let session = PhotoEditSession(photo: .fixture())
+        var adjustments = ColorAdjustments()
+        adjustments.saturation = 0.5
+
+        session.updateColorDraft(adjustments)
+
+        #expect(session.colorDraft == nil)
+        #expect(session.displayedColor == .identity)
+    }
+
+    @Test("A whole drag is one step, however many values arrived")
+    func aColourDragRecordsOneStep() {
+        let session = PhotoEditSession(photo: .fixture())
+        session.beginColorSession()
+
+        // What a slider drag looks like: the draft changes on every frame.
+        for step in 1...50 {
+            var draft = ColorAdjustments()
+            draft.saturation = Double(step) / 100
+            session.updateColorDraft(draft)
+        }
+        session.commitColor()
+
+        #expect(session.history.steps.count == 2, "One step, not fifty")
+        #expect(session.history.current.color.saturation == 0.5)
+        #expect(session.canUndo)
+    }
+
+    @Test("A colour change that ended where it started records nothing")
+    func anUnchangedColourChangeRecordsNothing() {
+        let session = PhotoEditSession(photo: .fixture())
+        session.beginColorSession()
+        var adjustments = ColorAdjustments()
+        adjustments.saturation = 0.3
+        session.updateColorDraft(adjustments)
+        // What a drag back to where it began leaves behind.
+        session.updateColorDraft(.identity)
+
+        let recorded = session.commitColor()
+
+        #expect(recorded == false)
+        #expect(session.history.steps.count == 1, "⌘Z is not spent on a no-op")
+        #expect(session.colorDraft == nil)
+    }
+
+    @Test("A colour step is named after the slider that moved")
+    func aColourStepIsNamedAfterItsSlider() {
+        let cases: [(ColorChange, (inout ColorAdjustments) -> Void)] = [
+            (.saturation, { $0.saturation = 0.4 }),
+            (.vibrance, { $0.vibrance = 0.4 }),
+            (.colorCast, { $0.colorCast = 0.4 }),
+            (.hue, { $0[.hue, in: .yellow] = 0.4 }),
+            (.bandSaturation, { $0[.saturation, in: .yellow] = 0.4 }),
+            (.luminance, { $0[.luminance, in: .yellow] = 0.4 }),
+        ]
+
+        for (expected, change) in cases {
+            let session = PhotoEditSession(photo: .fixture())
+            session.beginColorSession()
+            var adjustments = ColorAdjustments()
+            change(&adjustments)
+            session.updateColorDraft(adjustments)
+            session.commitColor()
+
+            #expect(session.undoName == .color(expected), "\(expected) was not named")
+        }
+    }
+
+    @Test("A change that moved more than one slider is just a colour change")
+    func aCompoundChangeIsNamedAsAColourChange() {
+        // What Reset does, and what a change made from the keyboard can do: two
+        // sliders in one step, which no single name is right for.
+        let session = PhotoEditSession(photo: .fixture())
+        session.beginColorSession()
+        var adjustments = ColorAdjustments()
+        adjustments.saturation = 0.4
+        adjustments[.hue, in: .blue] = 0.2
+        session.updateColorDraft(adjustments)
+        session.commitColor()
+
+        #expect(session.undoName == .color(.all))
+
+        // And back to the photo's own colours, which is the same name.
+        session.beginColorSession()
+        session.updateColorDraft(.identity)
+        session.commitColor()
+
+        #expect(session.undoName == .color(.all))
+    }
+
+    @Test("Undoing while a colour change is open abandons it")
+    func undoAbandonsAnOpenColourChange() {
+        let session = PhotoEditSession(photo: .fixture())
+        session.beginColorSession()
+        var adjustments = ColorAdjustments()
+        adjustments.saturation = 0.4
+        session.updateColorDraft(adjustments)
+        session.commitColor()
+
+        session.beginColorSession()
+        var second = ColorAdjustments()
+        second.vibrance = 0.6
+        session.updateColorDraft(second)
+
+        session.undo()
+
+        #expect(session.colorDraft == nil, "An undo leaves no draft the history has no record of")
+        #expect(session.displayedColor == .identity)
+    }
+
+    @Test("A colour step is taken back to the crop it was made on")
+    func aColourStepTakesBackToTheCrop() {
+        // The crop is where the photo starts, rather than a step of its own.
+        // `UndoManager` groups by event, and two commits made in the same turn of
+        // the run loop — which is every pair a test this size makes — are one
+        // group as far as it is concerned. Seeding the start keeps the test about
+        // what it says it is about.
+        let session = PhotoEditSession(
+            photo: .fixture(),
+            recipe: EditRecipe(crop: crop(offset: 0.25))
+        )
+
+        session.beginColorSession()
+        var adjustments = ColorAdjustments()
+        adjustments.saturation = -0.5
+        session.updateColorDraft(adjustments)
+        session.commitColor()
+
+        #expect(session.history.steps.count == 2, "One step, on top of where the photo started")
+        #expect(session.undoName == .color(.saturation))
+
+        session.undo()
+
+        #expect(session.history.current.color == .identity, "The colour goes")
+        #expect(session.history.current.crop.rect.minX == 0.25, "A colour step is not a crop step")
+
+        session.redo()
+        #expect(session.history.current.color.saturation == -0.5)
+    }
+
     // MARK: - Undo
 
     @Test("Undoing takes the photo back to the state before, and redoing forward again")

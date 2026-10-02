@@ -217,6 +217,10 @@ final class EditorViewModel {
         // that photo's history first — where ⌘Z can still reach it on the way
         // back. The tool closes, because a crop is about one picture.
         commitCropSession(closePanel: openTool == .crop)
+        // A colour change belongs to the photo being left too, but the panel stays
+        // open: it is a tool rather than a session, and the next photo is very
+        // often the one being graded next.
+        commitColorSession()
         sessionBase = nil
 
         selection = item
@@ -429,6 +433,89 @@ final class EditorViewModel {
         openTool = nil
     }
 
+    // MARK: - Colour
+
+    /// What the colour panel is showing: the drag in progress, or what the photo
+    /// has been committed to.
+    ///
+    /// Read straight off the session, which is what makes the panel follow the
+    /// canvas: `PhotoEditSession` is observable in its own right, so a view that
+    /// reads this depends on the draft rather than on a copy of it kept here.
+    var colorAdjustments: ColorAdjustments { currentSession?.displayedColor ?? .identity }
+
+    /// Opens a colour change, so a whole drag is one step's worth of draft.
+    ///
+    /// Called when a slider is first touched rather than when the tool opens:
+    /// the tool is a panel, and only a slider moved is an edit.
+    func beginColorChange() {
+        guard let item = selection else { return }
+        session(for: item).beginColorSession()
+    }
+
+    /// Closes a colour change, committing whatever it moved as one step.
+    ///
+    /// Called when the drag ends, and — for a change made from the keyboard or
+    /// VoiceOver, which has no drag to end — when the tool or the photo changes.
+    func endColorChange() {
+        commitColorSession()
+    }
+
+    func setSaturation(_ value: Double) {
+        changeColor { $0.saturation = value }
+    }
+
+    func setVibrance(_ value: Double) {
+        changeColor { $0.vibrance = value }
+    }
+
+    func setColorCast(_ value: Double) {
+        changeColor { $0.colorCast = value }
+    }
+
+    /// One band's value in one mode.
+    func setBand(_ channel: HSLChannel, _ band: ColorBand, to value: Double) {
+        changeColor { $0[channel, in: band] = value }
+    }
+
+    /// Back to the photo's own colours, as a single step.
+    func resetColor() {
+        guard let item = selection else { return }
+        let session = session(for: item)
+        session.beginColorSession()
+        session.updateColorDraft(.identity)
+        commitColorSession()
+    }
+
+    /// Commits the colour change in progress, if there is one.
+    ///
+    /// Called from every way out of a change: the pointer being let go, the tool
+    /// being swapped or shut, and the photo being left. A change nobody closed is
+    /// still a change, and dropping it because the user clicked a rail icon
+    /// rather than letting go of the mouse would be losing work to a
+    /// technicality.
+    ///
+    /// The panel stays open, unlike the crop's: it is a tool rather than a
+    /// session, and the next photo is very often the one being graded next.
+    func commitColorSession() {
+        guard currentSession?.commitColor() ?? false else { return }
+
+        refreshUndoState()
+        updateSessionBase()
+        reloadCanvas()
+    }
+
+    /// Changes the colour in progress, in place, and puts it on the canvas.
+    ///
+    /// A copy with the field that changed set on it, rather than a fresh value
+    /// built from the fields that did not: a slider added later cannot be quietly
+    /// dropped by a call site that never heard of it.
+    private func changeColor(_ change: (inout ColorAdjustments) -> Void) {
+        guard var draft = currentSession?.colorDraft else { return }
+        change(&draft)
+        currentSession?.updateColorDraft(draft)
+        reloadCanvas()
+    }
+
     /// Waits for the canvas to have caught up with whatever was last asked of it.
     ///
     /// Only a caller that needs the picture settled before carrying on needs this,
@@ -545,17 +632,20 @@ final class EditorViewModel {
 
     /// Opens `tool`'s panel, swaps to it, or closes it when it is already open.
     ///
-    /// Leaving the crop tool either way commits first. It is the only way out
-    /// that a user who has just spent a minute on a crop will actually take, and
-    /// silently dropping that work because they clicked an icon rather than a
-    /// button would be losing it to a technicality. Escape and Cancel are the
-    /// ways to say no.
+    /// Leaving either editing tool commits what it was in the middle of. For the
+    /// crop that is the only way out a user who has just spent a minute on a
+    /// handle drag will actually take, and silently dropping that work because
+    /// they clicked an icon rather than a button would be losing it to a
+    /// technicality. Escape and Cancel are the ways to say no.
     func toggleTool(_ tool: Tool) {
         let isClosing = openTool == tool
         commitCropSession(closePanel: false)
+        commitColorSession()
 
         guard !isClosing else {
             openTool = nil
+            // Any tool but the crop lets the working picture go with it.
+            updateSessionBase()
             return
         }
 
@@ -644,30 +734,50 @@ final class EditorViewModel {
     }
 
     /// Works out the picture the crop overlay sits on: the photo turned a
-    /// quarter, and nothing cropped from it.
+    /// quarter, with the colours it is being shown in, and nothing cropped from
+    /// it.
     ///
-    /// Nil whenever there is no session to measure, and whenever there is no
-    /// turn — in which case the canvas falls back to the photo's own untaken
-    /// frame, which is already the thing. So this is also how a session is let go,
-    /// and there is one way to say it rather than two that have to agree.
+    /// Nil whenever there is nothing the canvas does not already have — no turn,
+    /// and no colour change — in which case the canvas falls back to the photo's
+    /// own untaken frame, which is already the thing. So this is also how a
+    /// session is let go, and there is one way to say it rather than two that have
+    /// to agree.
+    ///
+    /// The colours are the reason this is here at all now. A crop handle is
+    /// dragged over the picture, so a photo that has been graded has to have its
+    /// crop dragged over the grade rather than over the file's own pixels — and
+    /// the untaken frame the canvas kept is the photo as it arrived.
     ///
     /// A handle drag never gets here: the overlay moves and the picture stays put.
     /// Only a turn changes what is underneath, and a turn is a button rather than
     /// a drag, so one render per press is affordable. Without it a quarter turn
     /// would move the crop rect over a picture that had not moved with it.
+    ///
+    /// Nothing is rendered unless the crop tool is open, because nothing reads
+    /// the picture unless the crop tool is open — the canvas only reaches for a
+    /// working picture while the overlay is on it. A colour change committed with
+    /// the crop tool shut used to render one at preview size that no one would
+    /// look at; the tool opening is what asks for it.
     private func updateSessionBase() {
         sessionBaseTask?.cancel()
 
-        guard let item = selection,
-              let rotation = draftCrop?.rotation,
-              rotation != .none
-        else {
+        guard isCropping, let item = selection else {
+            // Let the picture go with the tool: it is a preview's worth of
+            // pixels, and the next opening renders its own.
+            sessionBase = nil
+            return
+        }
+
+        let rotation = draftCrop?.rotation ?? .none
+        let color = colorAdjustments
+        guard rotation != .none || !color.isIdentity else {
             sessionBase = nil
             return
         }
 
         let recipe = EditRecipe(
-            crop: Crop(rect: CropGeometry.unitFrame, aspect: .free, rotation: rotation)
+            crop: Crop(rect: CropGeometry.unitFrame, aspect: .free, rotation: rotation),
+            color: color
         )
 
         sessionBaseTask = Task { [renderer] in
@@ -677,9 +787,14 @@ final class EditorViewModel {
                 maxPixelSize: AppLayout.previewMaxPixelSize
             ) else { return }
 
-            // A second press of Rotate supersedes this one, and the newer render
-            // is the one the overlay has been moved to match.
-            guard !Task.isCancelled, selection?.url == item.url, draftCrop?.rotation == rotation else { return }
+            // A second press of Rotate, or a colour that moved on while this was
+            // rendering, supersedes it: the newer picture is the one the overlay
+            // has been moved to match.
+            guard !Task.isCancelled,
+                  selection?.url == item.url,
+                  (draftCrop?.rotation ?? .none) == rotation,
+                  colorAdjustments == color
+            else { return }
             sessionBase = image
         }
     }

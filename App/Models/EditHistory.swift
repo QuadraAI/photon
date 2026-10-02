@@ -5,6 +5,27 @@
 
 import Foundation
 
+/// What the colour tool changed, in the user's terms.
+///
+/// The panel moves one slider per drag, so a step is usually one of these. It is
+/// not always — Reset moves all of them at once — which is what ``all`` is for.
+nonisolated enum ColorChange: Equatable, Sendable, Codable {
+    /// Every colour at once.
+    case saturation
+    /// The muted colours only.
+    case vibrance
+    /// The photo's own cast.
+    case colorCast
+    /// Every band's hue.
+    case hue
+    /// Every band's saturation.
+    case bandSaturation
+    /// Every band's luminance.
+    case luminance
+    /// The colour tool as a whole: a step that moved more than one slider.
+    case all
+}
+
 /// What a history step did, in the user's terms.
 ///
 /// An enum rather than a stored string: the history is a value that gets compared
@@ -17,6 +38,8 @@ nonisolated enum EditStepName: Equatable, Sendable, Codable {
     case crop(AspectRatio?)
     /// Turning, by however much the session turned it.
     case rotate(QuarterTurn)
+    /// What the colour tool did, by the slider that was moved.
+    case color(ColorChange)
     /// Back to the whole photo.
     case reset
 }

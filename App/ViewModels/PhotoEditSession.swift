@@ -34,6 +34,13 @@ final class PhotoEditSession {
     /// where it started costs no step.
     private(set) var draft: Crop?
 
+    /// The colour being worked on between the start of a slider drag and its end.
+    ///
+    /// The same bargain the crop draft strikes, for the same reason: a drag
+    /// reports a value per frame and a step per frame would bury the history
+    /// under one gesture. ``EditorViewModel/endColorChange()`` is what closes it.
+    private(set) var colorDraft: ColorAdjustments?
+
     /// What undoing and redoing would do, mirrored from ``history`` so the toolbar
     /// and the Edit menu have something observable to react to.
     private(set) var canUndo = false
@@ -53,10 +60,16 @@ final class PhotoEditSession {
 
     // MARK: - Reading
 
-    /// What the canvas should be showing: the draft while the crop tool is open,
+    /// What the canvas should be showing: the drafts while their tools are open,
     /// the committed recipe otherwise.
     var displayedRecipe: EditRecipe {
-        EditRecipe(crop: draft ?? history.current.crop)
+        EditRecipe(crop: draft ?? history.current.crop, color: displayedColor)
+    }
+
+    /// The colours the panel is showing: the drag in progress, or what the photo
+    /// has been committed to.
+    var displayedColor: ColorAdjustments {
+        colorDraft ?? history.current.color
     }
 
     // MARK: - Cropping
@@ -97,6 +110,45 @@ final class PhotoEditSession {
     /// recorded — Escape has to be able to cost nothing.
     func cancel() {
         draft = nil
+    }
+
+    // MARK: - Colour
+
+    /// Opens a colour change, starting from the colours the photo already has.
+    ///
+    /// Called when a slider is first touched. Opening one that is already open
+    /// leaves the draft where it is, so a drag that begins on one slider and ends
+    /// on another is still one step.
+    func beginColorSession() {
+        guard colorDraft == nil else { return }
+        colorDraft = history.current.color
+    }
+
+    func updateColorDraft(_ color: ColorAdjustments) {
+        guard colorDraft != nil else { return }
+        colorDraft = color
+    }
+
+    /// Records the change in progress as a single step, named after the sliders
+    /// it moved.
+    ///
+    /// - Returns: Whether anything was recorded. A drag that came back to where
+    ///   it started leaves nothing behind, so ⌘Z is not spent on a no-op.
+    @discardableResult
+    func commitColor() -> Bool {
+        guard let colorDraft else { return false }
+        self.colorDraft = nil
+
+        let base = history.current.color
+        guard colorDraft != base else { return false }
+
+        history.record(
+            EditRecipe(crop: history.current.crop, color: colorDraft),
+            name: Self.name(from: base, to: colorDraft)
+        )
+        registerUndo()
+        refresh()
+        return true
     }
 
     // MARK: - Undo
@@ -146,21 +198,23 @@ final class PhotoEditSession {
         }
     }
 
-    /// Moves the cursor back, leaving the draft behind.
+    /// Moves the cursor back, leaving the drafts behind.
     ///
-    /// The draft goes because an undo moves the photo to a state that was
-    /// recorded before it existed, so keeping it would leave the canvas showing a
-    /// crop the history has no record of. Lightroom does the same: ⌘Z in crop
-    /// mode steps the history and leaves the tool.
+    /// The drafts go because an undo moves the photo to a state that was recorded
+    /// before they existed, so keeping them would leave the canvas showing a crop,
+    /// or a grade, the history has no record of. Lightroom does the same: ⌘Z in
+    /// crop mode steps the history and leaves the tool.
     private func stepBack() {
         history.undo()
         draft = nil
+        colorDraft = nil
         refresh()
     }
 
     private func stepForward() {
         history.redo()
         draft = nil
+        colorDraft = nil
         refresh()
     }
 
@@ -178,6 +232,31 @@ final class PhotoEditSession {
 
         if case .fixed = crop.aspect { return .crop(crop.aspect) }
         return .crop(nil)
+    }
+
+    /// Names a colour change by the slider that was moved.
+    ///
+    /// A drag moves one slider, so this is usually exact. It is not always:
+    /// Reset moves all of them, and a change made from the keyboard can be
+    /// followed by another before either is committed. Those are just "Color",
+    /// which is true and does not guess at which of them the user would call it.
+    private static func name(from base: ColorAdjustments, to color: ColorAdjustments) -> EditStepName {
+        func bandsMoved(_ channel: HSLChannel) -> Bool {
+            ColorBand.allCases.contains { color[channel, in: $0] != base[channel, in: $0] }
+        }
+
+        // Every slider, and whether this change moved it.
+        let moved = [
+            (ColorChange.saturation, color.saturation != base.saturation),
+            (.vibrance, color.vibrance != base.vibrance),
+            (.colorCast, color.colorCast != base.colorCast),
+            (.hue, bandsMoved(.hue)),
+            (.bandSaturation, bandsMoved(.saturation)),
+            (.luminance, bandsMoved(.luminance)),
+        ].filter(\.1).map(\.0)
+
+        guard let only = moved.first, moved.count == 1 else { return .color(.all) }
+        return .color(only)
     }
 
     /// Reads the four mirrors off the history, which is the only thing that knows.

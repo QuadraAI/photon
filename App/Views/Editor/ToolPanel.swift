@@ -38,7 +38,9 @@ struct ToolPanel: View {
         switch tool {
         case .crop:
             CropPanel()
-        case .light, .color, .details, .presets:
+        case .color:
+            ColorPanel()
+        case .light, .presets:
             VStack(alignment: .leading, spacing: 0) {
                 Text("tool.panel.comingSoon")
                     .font(.callout)

@@ -5,6 +5,7 @@
 
 import CoreGraphics
 import CoreImage
+import CoreImage.CIFilterBuiltins
 import Foundation
 import ImageIO
 import Metal
@@ -21,6 +22,7 @@ import os
 /// stage order is a specification rather than a detail, and this is it:
 ///
 ///     decode (ImageIO, EXIF orientation baked in)
+///       → colour: cast, vibrance, saturation, bands
 ///       → turn
 ///       → crop
 ///       → render
@@ -29,12 +31,17 @@ import os
 /// agrees on this shape — darktable's pixelpipe and Lightroom's develop pipeline
 /// both put geometry at the end — because a tonal stage that ran on a cropped
 /// image would measure the crop rather than the photo, and two crops of the same
-/// picture would come out differently graded. There is nothing to order yet;
-/// there will be, and the order is cheaper to write down now than to discover.
+/// picture would come out differently graded.
 ///
-/// When the tonal tools land, the base decode moves from the thumbnail below to a
-/// `CIImage` read from the file — `CIRAWFilter` for a raw — and this comment
-/// becomes the list of stages between the decode and the turn. It is one function.
+/// Within the colour stages the order is the panel's, top to bottom: a cast is
+/// taken out of the photo before anything is measured against it, the two global
+/// sliders act on every colour, and the eight bands act last, on the colours the
+/// user can see by then.
+///
+/// The context works in the colour space Core Image defaults to — an extended
+/// *linear* sRGB, which is what Apple's own filters are built for and what makes
+/// a per-channel gain a white balance. The band maths is the one stage that
+/// needs a gamma-encoded space, and it converts for itself.
 actor CoreImagePhotoEditor: PhotoEditing {
     private let logger = Logger(subsystem: "com.quadra.Photon", category: "PhotoEditor")
 
@@ -45,9 +52,30 @@ actor CoreImagePhotoEditor: PhotoEditing {
     /// composition root and injected, rather than reached for as a singleton.
     private let context: CIContext
 
+    /// The band maths, compiled once. Nil on a machine with no Metal device,
+    /// where the three global sliders still work and the bands go quiet.
+    private let colorKernel: CIColorKernel?
+
     /// The last draft handed out, so the full decode can build on it rather than
     /// read the same preview twice for one click.
     private var lastDraft: (url: URL, maxPixelSize: Int, image: CGImage)?
+
+    /// The last photo's measured cast, so a slider drag measures it once rather
+    /// than on every frame.
+    private var lastCast: (url: URL, gains: SIMD3<Double>)?
+
+    /// Longest edge of the decode the colour cast is measured from.
+    ///
+    /// Fixed, rather than the size of the render underway: the correction has to
+    /// come out the same at preview size as at export, and an average taken over
+    /// a different set of pixels would not.
+    private static let castSampleSize = 256
+
+    /// How far a channel may be pushed to take a cast out.
+    ///
+    /// A photo that is one colour throughout — a frame filled by a leaf — would
+    /// otherwise ask for an unbounded correction.
+    private static let castGainRange: ClosedRange<Double> = 0.5...2
 
     init() {
         // Metal where there is a device, the CPU otherwise — a simulator, or a
@@ -59,6 +87,8 @@ actor CoreImagePhotoEditor: PhotoEditing {
             logger.notice("No Metal device; rendering through the CPU context")
             context = CIContext()
         }
+
+        colorKernel = ColorKernel.make()
     }
 
     // MARK: - PhotoEditing
@@ -78,10 +108,15 @@ actor CoreImagePhotoEditor: PhotoEditing {
         let limit = maxPixelSize ?? Int(max(sourceSize.width, sourceSize.height))
         let decoded = try decoded(url, maxPixelSize: limit)
 
+        let color = recipe.color
         let crop = recipe.crop
-        guard !crop.isIdentity else { return decoded }
+        guard !color.isIdentity || !crop.isIdentity else { return decoded }
 
         var image = CIImage(cgImage: decoded)
+        if !color.isIdentity {
+            image = coloured(image, with: color, of: url)
+        }
+
         if crop.rotation != .none {
             // `oriented(_:)` rather than a transform: it re-derives the extent,
             // where a rotation of a quarter turn about the origin leaves the
@@ -119,6 +154,118 @@ actor CoreImagePhotoEditor: PhotoEditing {
 
     func pixelSize(of url: URL) async throws(PhotoRenderError) -> CGSize {
         try uprightSize(of: url)
+    }
+
+    // MARK: - Colour
+
+    /// The photo with the colour tool's stages applied.
+    ///
+    /// Every stage is skipped when it is not asked for, so a photo with only a
+    /// cast correction never pays for the kernel, and one with only a band shift
+    /// never pays for the measurement.
+    private func coloured(_ image: CIImage, with color: ColorAdjustments, of url: URL) -> CIImage {
+        var image = image
+
+        if color.colorCast > 0, let gains = castGains(of: url) {
+            image = Self.balanced(image, by: gains, amount: color.colorCast)
+        }
+
+        if color.vibrance != 0 {
+            let vibrance = CIFilter.vibrance()
+            vibrance.inputImage = image
+            vibrance.amount = Float(color.vibrance)
+            image = vibrance.outputImage ?? image
+        }
+
+        if color.saturation != 0 {
+            let controls = CIFilter.colorControls()
+            controls.inputImage = image
+            // −1 is grey and +1 is twice the colour, which is what a saturation
+            // slider is expected to do at its ends.
+            controls.saturation = Float(1 + color.saturation)
+            image = controls.outputImage ?? image
+        }
+
+        if color.hasBandShift, let colorKernel,
+           let banded = ColorKernel.apply(color, to: image, using: colorKernel) {
+            image = banded
+        }
+
+        return image
+    }
+
+    /// How far each channel has to move to take the photo's own cast out.
+    ///
+    /// Grey-world: the average of the whole photo should be neutral, so the
+    /// correction is whatever brings it there. Measured from a fixed-size decode
+    /// rather than from whatever the render is working at, because the preview
+    /// and the export have to agree on the correction.
+    ///
+    /// The average is the whole of the estimate, and it is a blunt one: a sunset,
+    /// or a frame filled by one colour, is legitimately not neutral and this
+    /// pulls it toward grey anyway. The slider's default is off, which is where a
+    /// photo like that should stay. `CIAreaAverage` is the piece to replace when
+    /// a better estimate arrives; nothing else has to move.
+    private func castGains(of url: URL) -> SIMD3<Double>? {
+        if let lastCast, lastCast.url == url { return lastCast.gains }
+
+        guard let sample = try? thumbnail(for: url, maxPixelSize: Self.castSampleSize, from: .picture) else {
+            logger.error("Could not sample \(url.path(percentEncoded: false)) to measure its colour cast")
+            return nil
+        }
+
+        let average = CIFilter.areaAverage()
+        average.inputImage = CIImage(cgImage: sample)
+        average.extent = CGRect(x: 0, y: 0, width: sample.width, height: sample.height)
+        guard let averaged = average.outputImage else { return nil }
+
+        var pixel = [Float](repeating: 0, count: 4)
+        pixel.withUnsafeMutableBytes { buffer in
+            guard let base = buffer.baseAddress else { return }
+            context.render(
+                averaged,
+                toBitmap: base,
+                rowBytes: MemoryLayout<Float>.size * 4,
+                bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                // No colour matching, so what comes back is the working space's
+                // own numbers — which is the space the gains are applied in.
+                format: .RGBAf,
+                colorSpace: nil
+            )
+        }
+
+        let mean = SIMD3(Double(pixel[0]), Double(pixel[1]), Double(pixel[2]))
+        let neutral = (mean.x + mean.y + mean.z) / 3
+        guard neutral > 0 else { return nil }
+
+        // A channel that is already at zero cannot be brought up by a multiplier,
+        // so it asks for the most the range allows and the clamp answers.
+        func gain(_ channel: Double) -> Double {
+            guard channel > 1e-5 else { return Self.castGainRange.upperBound }
+            return (neutral / channel).clamped(to: Self.castGainRange)
+        }
+
+        let gains = SIMD3(gain(mean.x), gain(mean.y), gain(mean.z))
+        lastCast = (url, gains)
+        return gains
+    }
+
+    /// The photo with each channel moved `amount` of the way to its gain.
+    ///
+    /// Applied in the working space, which is linear: a white balance multiplies
+    /// light. The same multiplication on gamma-encoded values would correct by a
+    /// different amount in the shadows than in the highlights.
+    private static func balanced(_ image: CIImage, by gains: SIMD3<Double>, amount: Double) -> CIImage {
+        func scaled(_ gain: Double) -> CGFloat { CGFloat(1 + amount * (gain - 1)) }
+
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = image
+        matrix.rVector = CIVector(x: scaled(gains.x), y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: scaled(gains.y), z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: scaled(gains.z), w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        matrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        return matrix.outputImage ?? image
     }
 
     // MARK: - ImageIO
