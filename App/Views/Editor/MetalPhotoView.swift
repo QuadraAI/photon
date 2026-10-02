@@ -127,11 +127,12 @@ final class StagedPhotoView: MTKView {
         #if os(macOS)
         setAccessibilityElement(true)
         setAccessibilityRole(.image)
+        setAccessibilityIdentifier(Self.identifier)
         #else
         isAccessibilityElement = true
         accessibilityTraits = .image
+        accessibilityIdentifier = Self.identifier
         #endif
-        setAccessibilityIdentifier(Self.identifier)
         show(image, label: label)
     }
 
@@ -143,7 +144,13 @@ final class StagedPhotoView: MTKView {
     /// Puts a new picture up, and lets the next frame draw it.
     func show(_ image: CIImage, label: String) {
         self.image = image
+        // Spelled differently either side of the `#if`, unlike everything else
+        // the two platforms agree about here.
+        #if os(macOS)
         setAccessibilityLabel(label)
+        #else
+        accessibilityLabel = label
+        #endif
     }
 
     #if os(macOS)

@@ -109,10 +109,9 @@ struct GradientSlider: View {
             .highPriorityGesture(drag(travel: travel, radius: radius))
         }
         .frame(height: AppLayout.colorSliderHitHeight)
-        // A cursor that says the control is dragged sideways. macOS has no
-        // pointer at all over a view that does not ask for one, which leaves the
-        // track looking like something to read rather than something to move.
-        .pointerStyle(.columnResize)
+        // A cursor that says the control is dragged sideways, where there is a
+        // cursor to say it with.
+        .sidewaysCursor()
         // Focusable for the arrow keys, and drawn without a ring: eleven sliders
         // in a column, each drawing one the moment it is clicked, is a column of
         // boxes. Nothing else is lost — the keys still work, and the value still
@@ -188,5 +187,22 @@ struct GradientSlider: View {
     /// value around the range.
     static func value(at position: Double, in range: ClosedRange<Double>) -> Double {
         range.lowerBound + position.clamped(to: 0...1) * (range.upperBound - range.lowerBound)
+    }
+}
+
+private extension View {
+    /// Asks for the resize cursor, on the platform that has one.
+    ///
+    /// macOS draws no pointer at all over a view that does not ask for one, which
+    /// leaves a slider looking like something to read rather than something to
+    /// move — so the modifier earns its place there. `pointerStyle` does not
+    /// exist in the iOS SDK, and iPadOS reached the same idea by other means long
+    /// before it: a finger is the pointer.
+    @ViewBuilder func sidewaysCursor() -> some View {
+        #if os(macOS)
+        pointerStyle(.columnResize)
+        #else
+        self
+        #endif
     }
 }
