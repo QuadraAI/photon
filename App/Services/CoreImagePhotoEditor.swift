@@ -367,7 +367,42 @@ actor CoreImagePhotoEditor: PhotoEditing {
             return embedded
         }
 
+        // A RAW goes through Core Image's own RAW pipeline rather than ImageIO's
+        // generic decode. Apple tunes the demosaic, the noise reduction and the
+        // lens correction for each of the hundreds of camera models it knows,
+        // and none of that is in the generic path.
+        if let raw = rawImage(url, maxPixelSize: maxPixelSize) {
+            return raw
+        }
+
         return try thumbnail(for: url, maxPixelSize: maxPixelSize, from: .picture)
+    }
+
+    /// The file decoded by the RAW pipeline, or nil when it is not a RAW.
+    ///
+    /// The file decides which path it takes rather than a list of extensions
+    /// kept here: `CIFilter(imageURL:options:)` returns a `CIRAWFilter` for a RAW
+    /// and something else for a JPEG, so the cast *is* the question.
+    ///
+    /// `scaleFactor` is what makes this affordable. Core Image renders the photo
+    /// at that fraction of its native size, so a preview asks for the fraction
+    /// that fills the canvas and an export asks for 1 — the whole of the file,
+    /// which is the only place a RAW should ever be decoded at full size.
+    private func rawImage(_ url: URL, maxPixelSize: Int) -> CGImage? {
+        guard let filter = CIFilter(imageURL: url, options: nil) as? CIRAWFilter else { return nil }
+
+        let native = filter.nativeSize
+        guard native.width > 0, native.height > 0 else { return nil }
+
+        filter.scaleFactor = Float(min(1, CGFloat(maxPixelSize) / max(native.width, native.height)))
+
+        guard let image = filter.outputImage,
+              let colourSpace = image.colorSpace
+                ?? CGColorSpace(name: CGColorSpace.sRGB)
+                ?? CGColorSpaceCreateDeviceRGB() as CGColorSpace?
+        else { return nil }
+
+        return context.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: colourSpace)
     }
 
     private func thumbnail(

@@ -4,6 +4,7 @@
 //
 
 import CoreGraphics
+import CoreImage
 import Foundation
 import ImageIO
 import Testing
@@ -640,6 +641,21 @@ struct CoreImagePhotoEditorTests {
         let moved = Self.shortestShift(from: Self.hue(of: flat[0]), to: Self.hue(of: shifted[0]))
 
         #expect(abs(moved - 30) < 4, "Orange plus yellow moved the colour \(moved)° rather than 30°")
+    }
+
+    @Test("A file that is not a RAW is not put through the RAW pipeline")
+    func ordinaryFilesAreNotRaw() {
+        // The decode branches on what Core Image says the file is rather than on
+        // its extension, so this is the assumption that keeps every other test in
+        // this file on the path it was written for. A RAW fixture cannot be
+        // committed — a camera file is tens of megabytes — so what is pinned here
+        // is the near side of the branch.
+        for name in ["alpha.png", "beta.png", "Subfolder/delta.jpg"] {
+            #expect(
+                CIFilter(imageURL: Self.fixture(name), options: nil) as? CIRAWFilter == nil,
+                "\(name) was taken for a RAW"
+            )
+        }
     }
 
     // MARK: - Helpers
