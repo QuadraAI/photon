@@ -439,11 +439,14 @@ final class EditorViewModel {
         }
 
         // What the commit is about to record, and knowable before it records it:
-        // the draft's own crop, and the colour the photo already has. Only one
+        // the draft's own crop, through the key path the crop tool owns. Only one
         // tool is open at a time, so there is no colour draft to fold in.
-        let recipe = EditRecipe(crop: draft, color: session.history.current.color)
+        let committed = WantedPicture(
+            recipe: CropTool.commit(draft, into: session.history.current),
+            isTheFilesOwnPixels: false
+        )
 
-        refreshCanvas(recipe) {
+        refreshCanvas(committed) {
             session.recordCrop()
             if closePanel { self.openTool = nil }
             self.refreshUndoState()
@@ -458,7 +461,7 @@ final class EditorViewModel {
     func abandonCropSession() {
         guard let session = currentSession else { return }
 
-        refreshCanvas(session.history.current) {
+        refreshCanvas(WantedPicture(recipe: session.history.current, isTheFilesOwnPixels: false)) {
             session.discard()
             self.openTool = nil
         }
@@ -550,16 +553,30 @@ final class EditorViewModel {
 
     /// Waits for the canvas to have caught up with whatever was last asked of it.
     ///
-    /// Only a caller that needs the picture settled before carrying on needs this,
-    /// which in practice means tests — the same reason ``select(_:)`` waits for its
-    /// decode. The app never waits: the canvas holds the picture it has until the
-    /// new one is ready, which is what should happen.
+    /// The app waits in one place — the rail, where the next click has to be decided
+    /// against the state the last change left rather than against the picture still
+    /// on screen — and tests wait everywhere they assert on a picture.
+    ///
+    /// Nothing on screen waits: the canvas holds the picture it has until the new
+    /// one is ready, which is what should happen.
     ///
     /// Waiting means waiting for the *last* render, not the one in flight: a
     /// render held back to the cadence starts its successor on the way out, so
     /// one that was awaited can already have been replaced by the time it is
     /// done.
     func waitForCanvas() async {
+        // A rail click is part of what the canvas has been asked for: a change
+        // still being prepared has a picture and a panel on the way, and the state
+        // it will leave is the state to wait for.
+        await toolChangeTask?.value
+        await waitForPicture()
+    }
+
+    /// Waits for the picture on its way, if there is one.
+    ///
+    /// The half of ``waitForCanvas()`` that a rail change can wait for from the
+    /// inside: its own task is the one ``waitForCanvas()`` awaits first.
+    private func waitForPicture() async {
         await loadTask?.value
         while isRendering, let renderTask {
             await renderTask.value
@@ -668,30 +685,81 @@ final class EditorViewModel {
 
     // MARK: - Tools
 
+    /// The rail's clicks, in the order they arrived.
+    ///
+    /// One change at a time, and each waits for the one before it. A click is
+    /// decided against the state the *last* change leaves rather than against what
+    /// is still on screen: the icon clicked twice while the first change is being
+    /// rendered is the tool opened and then closed again, which is what the second
+    /// click meant — not the same request made twice.
+    @ObservationIgnored private var toolChangeTask: Task<Void, Never>?
+
     /// Opens `tool`'s panel, swaps to it, or closes it when it is already open.
     ///
-    /// Leaving either editing tool commits what it was in the middle of. For the
-    /// crop that is the only way out a user who has just spent a minute on a
-    /// handle drag will actually take, and silently dropping that work because
-    /// they clicked an icon rather than a button would be losing it to a
-    /// technicality. Escape and Cancel are the ways to say no.
+    /// Leaving either editing tool records what it was in the middle of. For the
+    /// crop that is the only way out a user who has just spent a minute on a handle
+    /// drag will actually take, and silently dropping that work because they
+    /// clicked an icon rather than a button would be losing it to a technicality.
+    /// Escape and Cancel are the ways to say no.
+    ///
+    /// The panel moves when the picture does. Which tool is open is half of what
+    /// decides the picture — the crop tool's picture is the photo *whole*, and
+    /// leaving it puts the crop back — so moving the panel first is a frame of the
+    /// wrong picture under the wrong overlay, which is the stutter confirming a
+    /// crop used to have. Nothing moves until the picture the new state asks for is
+    /// ready, and then everything moves at once.
     func toggleTool(_ tool: Tool) {
-        let isClosing = openTool == tool
-        commitCropSession(closePanel: false)
-        commitColorSession()
+        let previous = toolChangeTask
+        toolChangeTask = Task { [weak self] in
+            await previous?.value
+            await self?.show(tool)
+        }
+    }
 
-        if isClosing {
-            openTool = nil
-        } else {
-            openTool = tool
-            if tool == .crop { beginCropSession() }
+    /// Shows `tool`'s panel, once the picture it needs is ready.
+    private func show(_ tool: Tool) async {
+        let isClosing = openTool == tool
+
+        guard let item = selection else {
+            // No photo on the canvas: the rail is the window's own, and there is no
+            // picture for the panel to wait for.
+            land(tool, isClosing: isClosing)
+            return
         }
 
-        // Which tool is open is half of what decides the picture — the crop
-        // overlay is drawn over the photo whole — so the canvas is asked for the
-        // picture this state wants. It costs nothing where the state asks for the
-        // one already up.
-        refreshCanvas()
+        refreshCanvas(wantedPicture(after: tool, isClosing: isClosing)) {
+            // The photo may have been left while the picture was on its way: a
+            // change of tool belongs to the photo it was asked on, and the next
+            // photo's panel is that photo's business.
+            guard self.selection?.url == item.url else { return }
+            self.land(tool, isClosing: isClosing)
+        }
+
+        // Waits for the change to land, so the click behind this one is decided
+        // against the state this one leaves.
+        await waitForPicture()
+    }
+
+    /// Moves the panel, records what was open, and moves the undo mirror with them.
+    ///
+    /// Called in the turn the picture lands in, and never before it. The panel is
+    /// the window's, so it moves whether or not a photo is on the canvas; what the
+    /// *session* was working on is the photo's, and there is nothing to record
+    /// without one.
+    private func land(_ tool: Tool, isClosing: Bool) {
+        openTool = isClosing ? nil : tool
+
+        if let item = selection {
+            if isClosing {
+                session(for: item).record()
+            } else {
+                // Opening a tool records whatever was open first — the rule the tool
+                // session states for itself, so a crop cannot be dropped by a slider
+                // touched on the way to another panel.
+                session(for: item).open(tool)
+            }
+        }
+        refreshUndoState()
     }
 
     /// Clamped here, so a drag that runs off the end of the range is absorbed
@@ -794,18 +862,73 @@ final class EditorViewModel {
         )
     }
 
-    /// The picture the canvas should be showing, as the recipe that makes it, and
-    /// whether that picture is the file's own pixels.
+    /// The picture the canvas should be showing.
     ///
     /// One picture at a time, and which one is a property of the tool rather than
     /// of the photo: the working picture while the crop overlay is on the canvas —
     /// the photo *whole*, because a region cropped away has to stay on screen to
     /// be dragged back out — and the committed recipe, crop and all, every other
     /// time.
-    private var wantedPicture: (recipe: EditRecipe, isTheFilesOwnPixels: Bool) {
-        guard isCropping else { return (currentSession?.displayedRecipe ?? .identity, false) }
-        guard let working = workingRecipe else { return (.identity, true) }
-        return (working, false)
+    private var wantedPicture: WantedPicture {
+        guard isCropping, let crop = draftCrop else {
+            return WantedPicture(recipe: currentSession?.displayedRecipe ?? .identity, isTheFilesOwnPixels: false)
+        }
+        return workingPicture(for: crop)
+    }
+
+    /// The picture the canvas will be showing once `tool`'s panel is the one open.
+    ///
+    /// A projection, because the picture has to be rendered while the old state is
+    /// still on screen: what the canvas will want cannot be read off a state that
+    /// has not moved yet, and moving the state first is the frame this avoids.
+    private func wantedPicture(after tool: Tool, isClosing: Bool) -> WantedPicture {
+        if !isClosing, tool == .crop {
+            // Opening the crop tool: the photo whole, for the crop it is about to
+            // start from.
+            return workingPicture(for: currentSession?.history.current.crop ?? .identity)
+        }
+
+        if isCropping, let crop = draftCrop {
+            // Leaving it — closed, or swapped for another panel: the crop it was
+            // working on is what the photo becomes, and that is what gets rendered.
+            return WantedPicture(
+                recipe: CropTool.commit(crop, into: currentSession?.history.current ?? .identity),
+                isTheFilesOwnPixels: false
+            )
+        }
+
+        // A colour panel opening or closing changes no picture: the colours are the
+        // same value either side of the record that lands with it.
+        return wantedPicture
+    }
+
+    /// The picture the crop tool sits on, for a crop it is working on: the photo
+    /// whole — nothing cropped from it — turned the way the crop turns it and in
+    /// the colours it is being shown in.
+    ///
+    /// One that is not the file's own pixels when there is nothing to turn and
+    /// nothing graded, which is not "no picture": the picture asked for *is* the
+    /// file's own pixels, and there is nothing to render at all.
+    private func workingPicture(for crop: Crop) -> WantedPicture {
+        let color = colorAdjustments
+        guard crop.rotation != .none || !color.isIdentity else {
+            return WantedPicture(recipe: .identity, isTheFilesOwnPixels: true)
+        }
+
+        return WantedPicture(
+            recipe: EditRecipe(
+                crop: Crop(rect: CropGeometry.unitFrame, aspect: .free, rotation: crop.rotation),
+                color: color
+            ),
+            isTheFilesOwnPixels: false
+        )
+    }
+
+    /// A picture the canvas could be showing: the recipe that makes it, and whether
+    /// it is the file's own pixels — which need no render at all.
+    private struct WantedPicture {
+        let recipe: EditRecipe
+        let isTheFilesOwnPixels: Bool
     }
 
     /// Puts `picture` on the canvas.
@@ -855,17 +978,16 @@ final class EditorViewModel {
     /// graded one is ready.
     ///
     /// - Parameters:
-    ///   - picture: What to render, for a caller that knows what the picture should
-    ///     be before the state says so. A crop being confirmed is the case: the
-    ///     crop is rendered while the tool is still open on the photo it was taken
-    ///     from, so the overlay stays on that photo until the crop is ready to
-    ///     replace it.
+    ///   - picture: What the canvas should be showing, for a caller whose change is
+    ///     not in the state yet. Confirming a crop is the case, and so is a rail
+    ///     click: the picture the new state asks for is rendered while the old state
+    ///     is still on screen, and the two move together when it lands.
     ///   - landing: What to change in the turn the picture lands in, for the moves
-    ///     that must not be seen without it. Letting the tool go, closing its panel
-    ///     and moving the undo mirror belong to the crop appearing rather than to a
-    ///     turn before it: a turn between them is a frame of the whole photo with
-    ///     nothing on it, which is the stutter this had.
-    private func refreshCanvas(_ picture: EditRecipe? = nil, then landing: (() -> Void)? = nil) {
+    ///     that must not be seen without it. Letting the tool go, closing its panel,
+    ///     moving the panel at all and moving the undo mirror belong to the picture
+    ///     appearing rather than to a turn before it: a turn between them is a frame
+    ///     of the whole photo under the wrong overlay, which is the stutter this had.
+    private func refreshCanvas(_ picture: WantedPicture? = nil, then landing: (() -> Void)? = nil) {
         guard !isRendering else {
             isRenderPending = true
             // No picture to hang this on: one is already on its way, and it will
@@ -879,11 +1001,10 @@ final class EditorViewModel {
             return
         }
 
-        let (wanted, isTheFilesOwnPixels) = wantedPicture
-        let recipe = picture ?? wanted
+        let wanted = picture ?? wantedPicture
         // Already up: a refresh is a request to show what the state asks for, and
         // it asks for what is there.
-        guard !recipe.rendersTheSame(as: photo.recipe) else {
+        guard !wanted.recipe.rendersTheSame(as: photo.recipe) else {
             landing?()
             return
         }
@@ -891,8 +1012,8 @@ final class EditorViewModel {
         // Nothing to turn and nothing graded, so the picture is the file's own
         // pixels: the crop tool opens on the picture that is on the canvas and
         // costs no render at all.
-        if picture == nil, isTheFilesOwnPixels, let decoded {
-            publish(decoded.base, from: recipe, for: item)
+        if wanted.isTheFilesOwnPixels, let decoded {
+            publish(decoded.base, from: wanted.recipe, for: item)
             landing?()
             return
         }
@@ -939,7 +1060,7 @@ final class EditorViewModel {
             lastRenderBegan = ContinuousClock.now
 
             guard let item = selection, renderedPhoto != nil else { return }
-            let recipe = picture ?? wantedPicture.recipe
+            let recipe = (picture ?? wantedPicture).recipe
 
             do {
                 let image = try await renderer.preview(item.url, recipe: recipe, maxPixelSize: AppLayout.previewMaxPixelSize)

@@ -53,9 +53,14 @@ Resources/
   picture to fall back on showed the file's own ungraded pixels over a grade,
   which is the flash that rule removed.
 - **A change that must not be seen without its picture lands with it.** Confirming
-  or cancelling a crop renders the crop first, and records the step, closes the
-  panel and moves the undo mirror in the turn that picture appears. A turn
-  between them is a frame of the whole photo with nothing on it.
+  or cancelling a crop, and every click on the tool rail, renders the picture the
+  new state asks for *first*: then the picture, the panel, the overlay, the
+  recorded step and the undo mirror all move in the turn it appears. A turn
+  between them is a frame of the whole photo under the wrong overlay.
+- **One change at a time, and a click waits its turn.** A rail click that arrives
+  while the one before it is still being prepared is decided against the state
+  that change *leaves*, not against what is still on screen — so an icon clicked
+  twice is the tool opened and then closed again.
 - **Renders are paced to the display**: one every `1 / (2 × refresh)` at most
   (`RenderPacing`), and a request inside the interval waits rather than being
   dropped, so the value a drag ends on is always the one that lands.

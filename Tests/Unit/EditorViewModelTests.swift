@@ -95,6 +95,7 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.color)
+        await editor.waitForCanvas()
 
         await editor.load(.fixture(name: "Other"))
 
@@ -222,17 +223,21 @@ struct EditorViewModelTests {
     }
 
     @Test("Toggling a tool opens its panel, closes it, and swaps it")
-    func togglingTools() {
+    func togglingTools() async {
         let editor = makeEditor()
 
         editor.toggleTool(.light)
+        await editor.waitForCanvas()
         #expect(editor.openTool == .light)
 
         editor.toggleTool(.light)
+        await editor.waitForCanvas()
         #expect(editor.openTool == nil, "The tool that is open closes")
 
         editor.toggleTool(.light)
+        await editor.waitForCanvas()
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         #expect(editor.openTool == .crop, "Another tool swaps the panel rather than closing it")
     }
 
@@ -276,6 +281,7 @@ struct EditorViewModelTests {
         editor.setCropAspect(.fixed(width: 1, height: 1))
         editor.commitCropSession()
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
 
         editor.undo()
 
@@ -289,6 +295,7 @@ struct EditorViewModelTests {
 
         editor.setCropAspect(.fixed(width: 1, height: 1))
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         await editor.waitForCanvas()
 
         #expect(editor.openTool == nil)
@@ -316,6 +323,7 @@ struct EditorViewModelTests {
 
         await editor.select(first)
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         editor.setCropAspect(.fixed(width: 1, height: 1))
         editor.commitCropSession()
         await editor.waitForCanvas()
@@ -325,6 +333,7 @@ struct EditorViewModelTests {
         #expect(editor.undoName == nil)
 
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         editor.setCropAspect(.fixed(width: 4, height: 5))
         editor.commitCropSession()
         await editor.waitForCanvas()
@@ -348,6 +357,7 @@ struct EditorViewModelTests {
 
         await editor.select(first)
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         editor.setCropAspect(.fixed(width: 1, height: 1))
 
         await editor.select(second)
@@ -417,6 +427,7 @@ struct EditorViewModelTests {
         editor.beginColorChange()
         editor.setBand(.luminance, .green, to: -0.3)
         editor.toggleTool(.color)
+        await editor.waitForCanvas()
 
         #expect(editor.openTool == nil)
         #expect(editor.canUndo, "The change went into the history rather than being thrown away")
@@ -430,6 +441,7 @@ struct EditorViewModelTests {
         editor.beginColorChange()
         editor.setVibrance(0.6)
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
 
         #expect(editor.openTool == .crop)
         #expect(editor.undoName == .color(.vibrance))
@@ -445,12 +457,14 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         editor.setCropInset(.left, to: 0.25)
         editor.commitCropSession()
         await editor.waitForCanvas()
 
         let before = renderer.requestedURLs.count
         editor.toggleTool(.color)
+        await editor.waitForCanvas()
         editor.beginColorChange()
         editor.setSaturation(0.5)
         editor.endColorChange()
@@ -480,6 +494,7 @@ struct EditorViewModelTests {
 
         editor.toggleTool(.crop)
         await editor.waitForCanvas()
+        await editor.waitForCanvas()
 
         #expect(editor.isCropping)
         #expect(editor.canvasRecipe?.crop.isIdentity == true, "The overlay sits on the photo whole")
@@ -498,11 +513,13 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         editor.setCropInset(.left, to: 0.25)
         editor.commitCropSession()
         await editor.waitForCanvas()
 
         editor.toggleTool(.color)
+        await editor.waitForCanvas()
         editor.beginColorChange()
         editor.setSaturation(0.5)
         editor.endColorChange()
@@ -510,6 +527,7 @@ struct EditorViewModelTests {
 
         let before = renderer.requestedURLs.count
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         await editor.waitForCanvas()
 
         let asked = renderer.renderedRecipes.dropFirst(before)
@@ -537,6 +555,7 @@ struct EditorViewModelTests {
         await editor.waitForCanvas()
 
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         editor.setCropInset(.left, to: 0.25)
         editor.commitCropSession()
         await editor.waitForCanvas()
@@ -547,11 +566,86 @@ struct EditorViewModelTests {
         editor.toggleTool(.crop)
 
         #expect(editor.canvasPicture === cropped, "The canvas reached for another picture before this one was ready")
+        #expect(editor.openTool == nil, "The panel moved before the picture under it did")
 
         await editor.waitForCanvas()
         #expect(editor.canvasPicture !== cropped, "The whole photo never arrived")
         #expect(editor.canvasRecipe?.crop.isIdentity == true)
         #expect(editor.canvasRecipe?.color.saturation == 0.5)
+    }
+
+    @Test("A rail click moves the panel when the picture it needs does")
+    func aRailClickLandsWithThePicture() async {
+        // Which tool is open is half of what decides the picture — the crop tool's
+        // picture is the photo *whole* — so a panel that moved first is a frame of
+        // the wrong picture under the wrong overlay. Nothing moves until the picture
+        // is ready, and then everything moves at once.
+        let renderer = StubPhotoEditor(delay: .milliseconds(40))
+        let editor = makeEditor(renderer: renderer)
+        await editor.load(.fixture())
+        await editor.select(.fixture())
+        // Cropped *and* graded, so both directions of the change need a picture:
+        // an ungraded photo's whole self is the file's own pixels, which are
+        // already in hand and would land the change with no render at all.
+        editor.toggleTool(.color)
+        await editor.waitForCanvas()
+        editor.beginColorChange()
+        editor.setSaturation(0.5)
+        editor.endColorChange()
+        editor.toggleTool(.crop)
+        await editor.waitForCanvas()
+        editor.setCropInset(.left, to: 0.25)
+        editor.commitCropSession()
+        await editor.waitForCanvas()
+        editor.toggleTool(.color)
+        await editor.waitForCanvas()
+        let cropped = editor.canvasPicture
+
+        // Opening the crop tool asks for the whole photo, which is a render away.
+        editor.toggleTool(.crop)
+
+        #expect(editor.openTool == .color, "The panel moved before the picture under it did")
+        #expect(editor.isCropping == false, "The overlay came up over a picture it was not drawn for")
+        #expect(editor.canvasPicture === cropped, "And the picture under it had not moved either")
+
+        await editor.waitForCanvas()
+
+        #expect(editor.openTool == .crop)
+        #expect(editor.isCropping)
+        #expect(editor.canvasRecipe?.crop.isIdentity == true, "The overlay is on the photo whole")
+    }
+
+    @Test("The rail icon clicked twice is the tool opened and then closed again")
+    func theLastRailClickWins() async {
+        // A click that arrives while the one before it is still being prepared is
+        // decided against the state that change *leaves*, not against what is still
+        // on screen: the second click of a double-click means "close it", which is
+        // what a user who clicked twice meant.
+        let renderer = StubPhotoEditor(delay: .milliseconds(40))
+        let editor = makeEditor(renderer: renderer)
+        await editor.load(.fixture())
+        await editor.select(.fixture())
+        // Graded as well as cropped: opening the tool on a graded photo is a
+        // render away, which is the window the second click has to survive.
+        editor.toggleTool(.color)
+        await editor.waitForCanvas()
+        editor.beginColorChange()
+        editor.setSaturation(0.5)
+        editor.endColorChange()
+        editor.toggleTool(.crop)
+        await editor.waitForCanvas()
+        editor.setCropInset(.left, to: 0.25)
+        editor.commitCropSession()
+        await editor.waitForCanvas()
+
+        editor.toggleTool(.crop)
+        editor.toggleTool(.crop)
+
+        await editor.waitForCanvas()
+
+        #expect(editor.openTool == nil, "The second click closed what the first one opened")
+        #expect(editor.isCropping == false)
+        #expect(editor.canvasRecipe?.crop.isIdentity == false, "And the photo is still the crop it was")
     }
 
     @Test("Opening the crop tool on a photo that only has a crop costs no render")
@@ -565,12 +659,14 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         editor.setCropInset(.left, to: 0.25)
         editor.commitCropSession()
         await editor.waitForCanvas()
         let before = renderer.requestedURLs.count
 
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
 
         #expect(renderer.requestedURLs.count == before, "The picture asked for was one already in hand")
         #expect(editor.isCropping)
@@ -611,6 +707,7 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         editor.setCropInset(.left, to: 0.25)
         let committed = renderer.renderedRecipes.count
 
@@ -640,11 +737,13 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         editor.setCropInset(.left, to: 0.25)
         editor.commitCropSession()
         await editor.waitForCanvas()
 
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         editor.setCropInset(.top, to: 0.4)
         editor.abandonCropSession()
 
@@ -1111,6 +1210,7 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         let before = renderer.requestedURLs.count
 
         // A drag looks like this: the handler fires on every frame.
@@ -1182,6 +1282,7 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         editor.setCropAspect(.fixed(width: 1, height: 1))
         let before = renderer.requestedURLs.count
 
@@ -1199,6 +1300,7 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         let before = renderer.requestedURLs.count
 
         editor.rotateCrop(clockwise: true)
@@ -1219,6 +1321,7 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.crop)
+        await editor.waitForCanvas()
         return editor
     }
 
@@ -1230,6 +1333,7 @@ struct EditorViewModelTests {
         await editor.load(.fixture())
         await editor.select(.fixture())
         editor.toggleTool(.color)
+        await editor.waitForCanvas()
         return editor
     }
 
