@@ -530,9 +530,16 @@ final class EditorViewModel {
     /// which in practice means tests — the same reason ``select(_:)`` waits for its
     /// decode. The app never waits: the canvas holds the picture it has until the
     /// new one is ready, which is what should happen.
+    ///
+    /// Waiting means waiting for the *last* render, not the one in flight: a
+    /// render held back to the cadence starts its successor on the way out, so
+    /// one that was awaited can already have been replaced by the time it is
+    /// done.
     func waitForCanvas() async {
         await loadTask?.value
-        await renderTask?.value
+        while isRendering, let renderTask {
+            await renderTask.value
+        }
         await sessionBaseTask?.value
     }
 
@@ -832,21 +839,31 @@ final class EditorViewModel {
     @ObservationIgnored private var isRendering = false
     @ObservationIgnored private var isRenderPending = false
 
+    /// When the last render began, which is what the cadence is measured from.
+    ///
+    /// Nil until the canvas has rendered once, so the first picture is never
+    /// held back by a cadence that has not begun.
+    @ObservationIgnored private var lastRenderBegan: ContinuousClock.Instant?
+
     /// Re-renders the canvas from the selected photo's current recipe.
     ///
     /// Every commit, undo and redo lands here: one render per history move, which
     /// is exactly what a handle drag never has to do. A slider drag lands here
-    /// for every value it passes through, which is what the queue is for.
+    /// for every value it passes through, and the queue above is only half of
+    /// what makes that affordable — the other half is the cadence below, which
+    /// is what stops a drag from asking for more pictures than the screen has
+    /// frames.
     private func reloadCanvas() {
         guard !isRendering else {
             isRenderPending = true
             return
         }
 
-        renderTask?.cancel()
         guard let item = selection, let photo = renderedPhoto else { return }
 
-        let recipe = currentSession?.displayedRecipe ?? .identity
+        // One render at a time, and the guard above is what keeps it to one: a
+        // task stops being the current one by finishing, and it clears the flag
+        // in its own `defer`, so nothing here has to cancel anything.
         isRendering = true
 
         renderTask = Task { [renderer] in
@@ -858,6 +875,27 @@ final class EditorViewModel {
                 }
             }
 
+            // Held to the screen's rate. A value that arrives sooner than a
+            // frame can show it waits the rest of the interval rather than being
+            // rendered into a frame nobody sees, and the wait is also where a
+            // burst collapses: the recipe is read *after* it, so a value that
+            // arrived while this one was waiting is the value that lands.
+            let rate = AppLayout.displayRefreshRate
+            let now = ContinuousClock.now
+            if let began = lastRenderBegan,
+               !RenderPacing.shouldRender(now: now, lastRendered: began, refreshRate: rate) {
+                try? await Task.sleep(for: RenderPacing.interval(refreshRate: rate) - (now - began))
+                guard !Task.isCancelled else { return }
+            }
+
+            // Everything asked for up to here is in the recipe below, so the
+            // flag is settled rather than left to fetch a second render of the
+            // same picture. Anything asked for after it is a request this render
+            // cannot answer, and the `defer` takes it.
+            isRenderPending = false
+            lastRenderBegan = ContinuousClock.now
+
+            let recipe = currentSession?.displayedRecipe ?? .identity
             do {
                 let image = try await renderer.preview(item.url, recipe: recipe, maxPixelSize: AppLayout.previewMaxPixelSize)
                 guard !Task.isCancelled, selection?.url == item.url else { return }

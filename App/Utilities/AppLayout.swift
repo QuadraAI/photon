@@ -5,6 +5,12 @@
 
 import CoreGraphics
 
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
+
 /// Layout constants the screens and their previews share.
 ///
 /// Centralised rather than repeated so a preview cannot quietly drift from the
@@ -66,6 +72,43 @@ enum AppLayout {
     /// Comfortably larger than any canvas on a 2× display, and small enough that
     /// stepping through a folder stays responsive.
     static let previewMaxPixelSize = 2048
+
+    /// How many frames a second the display can take.
+    ///
+    /// Asked of the screen rather than taken for granted, because the two
+    /// platforms disagree about what is ordinary — an iPad Pro takes a hundred
+    /// and twenty — and because two things are decided against it: how often the
+    /// canvas is allowed to draw, and how often it is allowed to render
+    /// (``RenderPacing``).
+    ///
+    /// Read on each ask rather than once, since a window can be moved to a
+    /// display with a different rate and the app can be running before either
+    /// exists.
+    ///
+    /// The iOS branch goes through the connected scene's screen, not
+    /// `UIScreen.main`, which iOS 26 deprecates in favour of the screen found
+    /// through the context the app is drawing in.
+    static var displayRefreshRate: Double {
+        #if os(macOS)
+        let rate = NSScreen.main.map { Double($0.maximumFramesPerSecond) }
+        #else
+        let rate = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.screen.maximumFramesPerSecond }
+            .max()
+            .map { Double($0) }
+        #endif
+
+        // A screen that will not say — none attached yet, a test host with no
+        // window on one — or that answers with something that is not a rate at
+        // all, is taken for an ordinary sixty. Sixty is the one number that is
+        // never wrong in a way anyone can see: a slower cadence than the display
+        // takes is a picture a frame late, and a faster one is work nobody sees.
+        guard let rate, rate >= 1 else { return defaultRefreshRate }
+        return rate
+    }
+
+    /// What a display that will not say how fast it is is taken to be.
+    private static let defaultRefreshRate: Double = 60
 
     /// How big a crop handle is drawn, and how much of the canvas catches a drag
     /// on it.

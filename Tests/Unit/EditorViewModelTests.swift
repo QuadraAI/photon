@@ -935,6 +935,60 @@ struct EditorViewModelTests {
         #expect(renderer.requestedURLs.count == before, "The overlay moves; the pixels do not")
     }
 
+    @Test("A drag is rendered at the screen's rate, not the pointer's")
+    func aDragIsRenderedAtTheScreensRate() async {
+        // A drag hands over a value per frame of the pointer, and a screen takes
+        // sixty or a hundred and twenty a second. Everything in between is a
+        // picture nobody sees, paid for while the user waits for the picture to
+        // follow the pointer.
+        let renderer = StubPhotoEditor()
+        let editor = await editorWithColorOpen(renderer: renderer)
+        editor.beginColorChange()
+        let before = renderer.requestedURLs.count
+
+        // Each value is waited for, so every one of them really is a render the
+        // canvas could have started rather than one folded into the value
+        // before it.
+        let started = ContinuousClock.now
+        for step in 1...12 {
+            editor.setSaturation(Double(step) / 20)
+            await editor.waitForCanvas()
+        }
+        let elapsed = ContinuousClock.now - started
+
+        #expect(renderer.requestedURLs.count - before == 12, "No value that was waited for was lost")
+        #expect(
+            elapsed >= RenderPacing.interval(refreshRate: AppLayout.displayRefreshRate) * 10,
+            "Twelve values went through the canvas in \(elapsed), which is faster than the screen takes frames"
+        )
+        #expect(
+            renderer.renderedRecipes.last?.color.saturation == 0.6,
+            "The drag ended on 0.6, and the value a drag ends on is the one on the canvas"
+        )
+    }
+
+    @Test("A burst of values inside one turn is one render, of the value it ended on")
+    func aBurstInsideOneTurnRendersOnce() async {
+        // What a drag looks like from the main actor's side: twenty values
+        // arrive between two of its turns, and every one of them asks for a
+        // picture.
+        let renderer = StubPhotoEditor()
+        let editor = await editorWithColorOpen(renderer: renderer)
+        editor.beginColorChange()
+        let before = renderer.requestedURLs.count
+
+        for step in 1...20 {
+            editor.setSaturation(Double(step) / 40)
+        }
+        await editor.waitForCanvas()
+
+        #expect(renderer.requestedURLs.count == before + 1, "Nineteen of the twenty asked for a picture nobody would see")
+        #expect(
+            renderer.renderedRecipes.last?.color.saturation == 0.5,
+            "The picture that was drawn is the one the burst ended on"
+        )
+    }
+
     @Test("Committing re-renders the canvas once, from the crop that was committed")
     func committingReRendersOnce() async {
         let renderer = StubPhotoEditor()

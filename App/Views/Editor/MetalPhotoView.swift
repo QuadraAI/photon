@@ -127,8 +127,13 @@ final class StagedPhotoView: MTKView {
         // them — which is the pointer waiting for the picture instead of the
         // picture following the pointer. One frame per display frame coalesces
         // the rest, and a frame with nothing new in it costs a comparison.
+        //
+        // The display's own rate, whatever it is: this is how often the view is
+        // *allowed* to draw, and one allowed faster than the screen takes frames
+        // is an ask the screen refuses. What it draws is still decided per frame
+        // by `isWorthDrawing` below.
         isPaused = false
-        preferredFramesPerSecond = 60
+        preferredFramesPerSecond = Int(AppLayout.displayRefreshRate)
         enableSetNeedsDisplay = false
 
         // The picture is what is being looked at, so it is announced as one:
