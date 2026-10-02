@@ -100,7 +100,14 @@ final class PhotoEditSession {
         let base = history.current.crop
         guard draft != base else { return false }
 
-        history.record(EditRecipe(crop: draft), name: Self.name(from: base, to: draft))
+        // The colour is carried over rather than defaulted. A tool writes its own
+        // field of the recipe and copies every other one from what is committed —
+        // building a fresh `EditRecipe` here silently threw the grade away, and
+        // the rule is what stops the next tool doing the same to the crop.
+        history.record(
+            EditRecipe(crop: draft, color: history.current.color),
+            name: Self.name(from: base, to: draft)
+        )
         registerUndo()
         refresh()
         return true

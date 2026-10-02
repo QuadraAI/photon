@@ -16,6 +16,43 @@ import Testing
 struct PhotoEditSessionTests {
     // MARK: - Before anything happens
 
+    @Test("A commit keeps what every other tool has already recorded")
+    func aCommitKeepsTheOtherToolsWork() {
+        // The rule, stated over the tools rather than over the one that broke it:
+        // a tool writes its own field of the recipe and copies every other field
+        // from what is committed. Building a fresh recipe instead threw the grade
+        // away on every crop — and would have thrown the crop away on every grade,
+        // which is the same bug from the other side.
+        var graded = ColorAdjustments()
+        graded.saturation = 0.5
+        let crop = Crop(rect: CGRect(x: 0, y: 0, width: 0.5, height: 0.5), aspect: .free, rotation: .none)
+
+        let session = PhotoEditSession(photo: .fixture())
+        session.beginColorSession()
+        session.updateColorDraft(graded)
+        session.commitColor()
+
+        session.beginCropSession()
+        session.updateDraft(crop)
+        session.commit()
+
+        #expect(session.history.current.color == graded, "The crop threw the grade away")
+        #expect(session.history.current.crop == crop, "And kept its own change")
+
+        // The other way round, so the rule is held from both sides.
+        let other = PhotoEditSession(photo: .fixture())
+        other.beginCropSession()
+        other.updateDraft(crop)
+        other.commit()
+
+        other.beginColorSession()
+        other.updateColorDraft(graded)
+        other.commitColor()
+
+        #expect(other.history.current.crop == crop, "The grade threw the crop away")
+        #expect(other.history.current.color == graded, "And kept its own change")
+    }
+
     @Test("A photo with nothing done to it has nothing to undo")
     func aFreshSessionHasNothingToUndo() {
         let session = PhotoEditSession(photo: .fixture())
