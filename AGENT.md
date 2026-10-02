@@ -39,15 +39,18 @@ Resources/
 **MVVM:** Views thin. Logic in view models or services, never in `View.body`. Inject dependencies via initializers or protocols. No singletons.
 
 **Editing pipeline:**
-- Non‑destructive only. Never mutate originals. Store ordered `EditOperation` stack; render preview by applying to a working `CIImage`.
-- One shared `CIContext` backed by `MTLDevice`.
+- Non‑destructive only. Never mutate originals. An edit is an `EditRecipe`: one value type per tool, applied in a **fixed** order — colour → turn → crop — that is the pipeline's and not the user's. Reordering stages is deliberately not a feature: a fixed order is what keeps a photo's look reproducible between versions, which is why Lightroom ships a process version rather than a reorderable stack. A new tool adds a value type and a stage at a chosen point, not an entry in a list.
+- Preview is *staged*, not rendered: `preview` hands the canvas a `CIImage` and the canvas draws it on the GPU (`StagedPhotoView`). Pixels (`render`) are for export.
+- One shared `CIContext` backed by `MTLDevice`, handed to whatever draws a preview — a second context compiles the same kernels again and has none of the first one's cached work.
 - Downsample preview; full resolution only on export.
-- Preserve color space and metadata (EXIF, GPS, orientation, profile). Support Display P3, HDR. Use `CIRAWFilter` for RAW.
+- Render the preview at the size the display needs, not larger: a preview bigger than the canvas is work nobody sees. `CIRAWFilter.scaleFactor` is the RAW half of this.
+- Preserve color space and metadata (EXIF, GPS, orientation, profile). Draw in the display's space — P3 on a P3 display. HDR/EDR is a later step and arrives when the pipeline is half‑float end to end; today the canvas is 8‑bit sRGB, which is a stated limit and not an oversight.
+- RAW goes through `CIRAWFilter`, for Apple's per‑camera calibration rather than the generic decode.
 - Heavy work off main actor (`Task.detached` or `actor`).
 
-**Persistence:** SwiftData for `PhotoDocument`, `EditOperation`, `Preset`, `ExportSettings`. Images as file references, not blobs. `Codable` for presets and edit stacks.
+**Persistence:** `Codable` for recipes and presets, written as files — a preset is a document the user can move between machines, and an edit belongs with the photo it is of. Images stay file references, never blobs. SwiftData is for a catalogue of *relationships* (keywords, collections, sessions) if one is ever needed, not for edits. (An earlier draft of this file named SwiftData for `Preset` and `Codable` for presets in the same breath; that was a contradiction, not a plan.)
 
-**Undo/Redo:** `UndoManager`. Snapshot edit stack, not image.
+**Undo/Redo:** `UndoManager`. Snapshot the recipe, not the image.
 
 **View state:** enums with associated values, not boolean flags.
 
@@ -83,7 +86,7 @@ Resources/
 
 ## Testing
 
-Swift Testing (`import Testing`); migrate XCTest to `#expect` / `#require` where practical. `@MainActor` on main‑isolated tests. Protocol‑based mocks. Cover edit serialization, undo/redo, color preservation, export metadata, concurrency safety, accessibility traits. Snapshot tests for non‑trivial reusable views.
+Swift Testing (`import Testing`); migrate XCTest to `#expect` / `#require` where practical. `@MainActor` on main‑isolated tests. Protocol‑based mocks. Cover edit serialization, undo/redo, color preservation, export metadata, concurrency safety, accessibility traits. Snapshot tests for non‑trivial reusable views: render the view with `ImageRenderer`, compare against a PNG fixture committed under `Tests/`, on a tolerance rather than exactly, and fail by writing the new image out to be looked at. First‑party, because a third‑party snapshot library is a dependency this project does not take.
 
 **UI tests** (`Tests/UI`, target `PhotonUITests`) are XCTest — XCUITest has no Swift Testing support. They drive the *real* system open panel rather than injecting a folder, because Photon is sandboxed with only user-selected file access. Two consequences worth remembering:
 
