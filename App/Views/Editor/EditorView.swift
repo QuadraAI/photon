@@ -37,6 +37,10 @@ struct EditorView: View {
     @State private var windowWidth: CGFloat = 0
     @State private var canvasMidX: CGFloat = 0
 
+    /// Whether the canvas is the keyboard's focus, which is what lets the arrow
+    /// keys move through the folder's photos.
+    @FocusState private var isCanvasFocused: Bool
+
     /// Space the detail column's leading edge is measured in. Named rather than
     /// `.global` so the number is the sidebar's width alone, with no window
     /// position folded into it.
@@ -100,6 +104,31 @@ struct EditorView: View {
                     proxy.frame(in: .named(Self.splitViewSpace)).midX
                 } action: { midX in
                     canvasMidX = midX
+                }
+                // The canvas is where the photo is looked at, so the bare
+                // arrows act on it. The sidebar's list answers the same keys
+                // itself, and the filter field keeps them for its text.
+                .focusable(interactions: .edit)
+                .focusEffectDisabled()
+                .focused($isCanvasFocused)
+                .onKeyPress(keys: [.upArrow, .downArrow]) { press in
+                    // A modified arrow is another command; Caps Lock and a
+                    // keypad arrow are still just arrows.
+                    guard
+                        press.modifiers.isDisjoint(with: [.command, .option, .control, .shift])
+                    else { return .ignored }
+
+                    if press.key == .upArrow {
+                        editor.selectPreviousPhoto()
+                    } else {
+                        editor.selectNextPhoto()
+                    }
+                    return .handled
+                }
+                .task {
+                    // Focus starts here, so the first arrow press works without
+                    // a click.
+                    isCanvasFocused = true
                 }
 
             if let tool = editor.openTool {

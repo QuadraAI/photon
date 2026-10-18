@@ -215,6 +215,150 @@ struct EditorViewModelTests {
         #expect(editor.decodedPhoto == second)
     }
 
+    // MARK: - Moving through the photos
+
+    @Test("The arrows move one photo either way, and stop at the ends")
+    func arrowsMoveEitherWay() async {
+        let photos = [PhotoItem.fixture(name: "a.jpg"), .fixture(name: "b.jpg"), .fixture(name: "c.jpg")]
+        let editor = makeEditor(library: StubPhotoLibrary(photos: photos))
+        await editor.load(.fixture())
+        await editor.select(photos[1])
+
+        editor.selectNextPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == photos[2], "Down moves to the next photo")
+        #expect(editor.decodedPhoto == photos[2])
+
+        editor.selectNextPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == photos[2], "There is nothing below the last photo")
+
+        editor.selectPreviousPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == photos[1])
+
+        editor.selectPreviousPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == photos[0])
+
+        editor.selectPreviousPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == photos[0], "There is nothing above the first photo")
+    }
+
+    @Test("The arrows step through only the photos the filter lets through")
+    func arrowsFollowTheFilter() async {
+        let photos = [
+            PhotoItem.fixture(name: "IMG_1.jpg"),
+            PhotoItem.fixture(name: "IMG_2.jpg"),
+            PhotoItem.fixture(name: "OTHER.jpg"),
+        ]
+        let editor = makeEditor(library: StubPhotoLibrary(photos: photos))
+        await editor.load(.fixture())
+        await editor.select(photos[0])
+        editor.filter = "IMG"
+
+        editor.selectNextPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == photos[1])
+
+        editor.selectNextPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == photos[1], "OTHER.jpg was filtered out of the list")
+    }
+
+    @Test("The arrows do nothing when there is no photo row to land on")
+    func arrowsDoNothingWithoutARow() async {
+        let empty = makeEditor(library: StubPhotoLibrary(photos: []))
+        await empty.load(.fixture())
+        empty.selectNextPhoto()
+        empty.selectPreviousPhoto()
+        #expect(empty.selection == nil)
+        #expect(empty.isShowingNothing)
+
+        let folded = makeEditor(
+            library: StubPhotoLibrary(photos: [
+                .fixture(name: "a.jpg", subfolderPath: "A"),
+                .fixture(name: "b.jpg", subfolderPath: "B"),
+            ])
+        )
+        await folded.load(.fixture())
+        folded.selectNextPhoto()
+        folded.selectPreviousPhoto()
+        #expect(folded.selection == nil, "Every photo is inside a folded folder")
+        #expect(folded.isShowingNothing)
+    }
+
+    @Test("With nothing selected, the arrows start at the ends of the listed rows")
+    func arrowsStartAtTheEndsOfTheListedTree() async {
+        let inFolderA = PhotoItem.fixture(name: "m.jpg", subfolderPath: "A")
+        let inFolderB = PhotoItem.fixture(name: "a.jpg", subfolderPath: "B")
+        let lastRoot = PhotoItem.fixture(name: "z.jpg")
+        // The scanner's order is not the tree's: B's photo comes first by name.
+        let photos = [inFolderB, inFolderA, lastRoot]
+
+        let down = makeEditor(library: StubPhotoLibrary(photos: photos))
+        await down.load(.fixture())
+        down.expandedFolders = ["A", "B"]
+        down.selectNextPhoto()
+        await down.waitForCanvas()
+        #expect(down.selection == inFolderA, "Down starts at the first row, not the first file name")
+
+        let up = makeEditor(library: StubPhotoLibrary(photos: photos))
+        await up.load(.fixture())
+        up.expandedFolders = ["A", "B"]
+        up.selectPreviousPhoto()
+        await up.waitForCanvas()
+        #expect(up.selection == lastRoot, "Up starts at the last row")
+    }
+
+    @Test("The arrows follow the sidebar's rows, not the file names")
+    func arrowsFollowTheListedTree() async {
+        let inFolderA = PhotoItem.fixture(name: "m.jpg", subfolderPath: "A")
+        let inFolderB = PhotoItem.fixture(name: "a.jpg", subfolderPath: "B")
+        let firstRoot = PhotoItem.fixture(name: "c.jpg")
+        let secondRoot = PhotoItem.fixture(name: "z.jpg")
+        let editor = makeEditor(
+            library: StubPhotoLibrary(photos: [inFolderB, firstRoot, inFolderA, secondRoot])
+        )
+        await editor.load(.fixture())
+        editor.expandedFolders = ["A", "B"]
+        await editor.select(inFolderA)
+
+        editor.selectNextPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == inFolderB, "The next row is B's photo, though its name sorts earlier")
+
+        editor.selectNextPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == firstRoot, "A folder's photos come before the root's")
+
+        editor.selectNextPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == secondRoot)
+    }
+
+    @Test("A folded folder hides its photo from the arrows")
+    func arrowsSkipAndRecoverFromFoldedFolders() async {
+        let inFolderA = PhotoItem.fixture(name: "m.jpg", subfolderPath: "A")
+        let inFolderB = PhotoItem.fixture(name: "a.jpg", subfolderPath: "B")
+        let root = PhotoItem.fixture(name: "c.jpg")
+        let editor = makeEditor(library: StubPhotoLibrary(photos: [inFolderB, root, inFolderA]))
+        await editor.load(.fixture())
+        editor.expandedFolders = ["A"]
+        await editor.select(inFolderA)
+
+        editor.selectNextPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == root, "B is folded, so its photo is not a row")
+
+        await editor.select(inFolderA)
+        editor.expandedFolders = []
+        editor.selectNextPhoto()
+        await editor.waitForCanvas()
+        #expect(editor.selection == root, "A is folded, so the arrows recover at the first visible row")
+    }
+
     // MARK: - Tools
 
     @Test("The rail starts with no panel open")
@@ -858,6 +1002,24 @@ struct EditorViewModelTests {
         await editor.load(.fixture(name: "Other"))
 
         #expect(editor.filter.isEmpty)
+    }
+
+    @Test("A filter keeps the folders open, and another folder closes them")
+    func expansionBelongsToItsFolder() async {
+        let editor = makeEditor(
+            library: StubPhotoLibrary(photos: [
+                .fixture(name: "Sunset.jpg", subfolderPath: "Holiday"),
+                .fixture(name: "Portrait.jpg", subfolderPath: "Studio"),
+            ])
+        )
+        await editor.load(.fixture())
+        editor.expandedFolders = ["Holiday", "Studio"]
+
+        editor.filter = "Sunset"
+        #expect(editor.expandedFolders == ["Holiday", "Studio"])
+
+        await editor.load(.fixture(name: "Other"))
+        #expect(editor.expandedFolders.isEmpty)
     }
 
     // MARK: - The listed tree

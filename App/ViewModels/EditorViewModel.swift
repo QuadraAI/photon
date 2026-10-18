@@ -186,6 +186,9 @@ final class EditorViewModel {
         // starts over with it. Assigning it is also what re-derives the list.
         library = .loading
         filter = ""
+        // The folders that were open belong to the folder being left too: their
+        // paths are relative, and a new folder's tree starts folded.
+        expandedFolders.removeAll()
         refreshUndoState()
 
         do {
@@ -302,6 +305,38 @@ final class EditorViewModel {
     func select(_ item: PhotoItem) async {
         beginSelecting(item)
         await loadTask?.value
+    }
+
+    /// Puts the next photo the sidebar is showing on the canvas.
+    ///
+    /// The order is the sidebar's: folders before root photos, a folder's
+    /// subfolders before its own photos, and only open folders.
+    func selectNextPhoto() {
+        stepSelection(by: 1)
+    }
+
+    /// Puts the previous photo the sidebar is showing on the canvas.
+    func selectPreviousPhoto() {
+        stepSelection(by: -1)
+    }
+
+    /// Moves `offset` rows along ``listedPhotos``, stopping at either end.
+    ///
+    /// With nothing selected — or a selection that is folded or filtered away —
+    /// the first press picks the end it is heading towards.
+    private func stepSelection(by offset: Int) {
+        let photos = listedPhotos
+        guard !photos.isEmpty else { return }
+
+        guard let selection, let current = photos.firstIndex(of: selection) else {
+            beginSelecting(offset > 0 ? photos[0] : photos[photos.count - 1])
+            return
+        }
+
+        let index = current + offset
+        guard photos.indices.contains(index) else { return }
+
+        beginSelecting(photos[index])
     }
 
     // MARK: - Cropping
@@ -606,6 +641,33 @@ final class EditorViewModel {
     /// photos and folders.
     private(set) var nodes: [LibraryNode] = []
 
+    /// The folders whose rows are open, by their path relative to the folder on
+    /// show.
+    ///
+    /// Owned here because the arrows move through the photos the sidebar is
+    /// *showing*: a folded folder's photos are not rows.
+    var expandedFolders: Set<String> = []
+
+    /// The photos the sidebar is showing, in the order it draws them.
+    private var listedPhotos: [PhotoItem] {
+        photos(in: nodes)
+    }
+
+    /// ``nodes`` flattened in row order, with folded folders contributing
+    /// nothing.
+    private func photos(in nodes: [LibraryNode]) -> [PhotoItem] {
+        nodes.flatMap { node -> [PhotoItem] in
+            switch node {
+            case .photo(let photo):
+                [photo]
+            case .folder(let folder) where expandedFolders.contains(folder.path):
+                photos(in: folder.children)
+            case .folder:
+                []
+            }
+        }
+    }
+
     /// True when a filter is hiding every photo, which is worth saying out loud
     /// rather than showing an empty list.
     var isFilteringToNothing: Bool {
@@ -631,6 +693,11 @@ final class EditorViewModel {
     /// The photo a row stands for, or nil for a folder's row.
     func photo(withNodeID id: URL) -> PhotoItem? {
         matches.first { $0.id == id }
+    }
+
+    /// The URL the sidebar tags the folder at `path` with.
+    func folderURL(forPath path: String) -> URL? {
+        folder?.url.appending(path: path)
     }
 
     /// Builds the tree the sidebar lists: folders first, then the folder's own

@@ -18,9 +18,11 @@ struct MediaSidebar: View {
     /// the editor, and the folder is the editor's, not something it owns.
     let folderName: String
 
-    /// The folders the user has opened, by their path. Kept here rather than in
-    /// the tree, so a filter or another folder does not close them.
-    @State private var expanded: Set<String> = []
+    /// The row the list shows as chosen.
+    ///
+    /// Not always the photo on the canvas: a folder row can take the keyboard
+    /// without changing the picture.
+    @State private var selectedRow: URL?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,6 +32,33 @@ struct MediaSidebar: View {
             }
             content
         }
+        // The canvas can move the photo on its own — the arrow keys do — so the
+        // list follows it.
+        .onAppear { selectedRow = editor.selection?.id }
+        .onChange(of: editor.selection?.id) { _, id in
+            selectedRow = id
+        }
+        // Opening or closing a folder around the selected photo moves the
+        // keyboard to the folder row; leaving the photo chosen as well would
+        // draw two rows as selected.
+        .onChange(of: editor.expandedFolders) { old, new in
+            moveSelectionToChangedFolder(old.symmetricDifference(new))
+        }
+    }
+
+    /// Moves the list's choice to a folder that was just opened or closed around
+    /// the selected photo. The canvas keeps the photo.
+    private func moveSelectionToChangedFolder(_ changed: Set<String>) {
+        guard
+            let id = selectedRow,
+            let photo = editor.photo(withNodeID: id),
+            let path = changed.first(where: {
+                photo.subfolderPath == $0 || photo.subfolderPath.hasPrefix($0 + "/")
+            }),
+            let folder = editor.folderURL(forPath: path)
+        else { return }
+
+        selectedRow = folder
     }
 
     // MARK: - Header
@@ -143,6 +172,8 @@ struct MediaSidebar: View {
     // MARK: - List
 
     private var photoList: some View {
+        @Bindable var editor = editor
+
         // A plain `List` with a selection binding rather than buttons with a
         // hand-painted highlight: this is what gives the native rounded
         // selection, the dimmed look when the window is inactive, hover
@@ -150,11 +181,12 @@ struct MediaSidebar: View {
         //
         // It lists a tree, because a `List` lays out every row it is handed:
         // folded up, a folder of thousands is a single row.
-        List(selection: selectedPhoto) {
+        return List(selection: rowSelection) {
             ForEach(editor.nodes) { node in
                 switch node {
                 case .folder(let folder):
-                    FolderRows(expanded: $expanded, folder: folder)
+                    FolderRows(expanded: $editor.expandedFolders, folder: folder)
+                        .tag(folder.id)
                 case .photo(let photo):
                     PhotoRow(photo: photo).listed
                 }
@@ -170,12 +202,15 @@ struct MediaSidebar: View {
 
     /// Selecting is deliberately not a plain assignment: the row is highlighted
     /// on the same frame, and the decode happens behind it.
-    private var selectedPhoto: Binding<URL?> {
+    ///
+    /// A folder's row is a row like any other, so it becomes the list's
+    /// selection; it is not a photo, so the canvas keeps the picture it had.
+    private var rowSelection: Binding<URL?> {
         Binding(
-            get: { editor.selection?.id },
+            get: { selectedRow },
             set: { id in
-                // A folder's row carries its own URL, and choosing one is not
-                // choosing a photo.
+                selectedRow = id
+
                 guard let id, let photo = editor.photo(withNodeID: id) else { return }
                 editor.beginSelecting(photo)
             }
