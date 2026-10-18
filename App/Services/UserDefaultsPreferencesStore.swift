@@ -15,6 +15,8 @@ nonisolated struct UserDefaultsPreferencesStore: PreferencesStoring, @unchecked 
     private enum Key {
         static let language = "preferences.language"
         static let theme = "preferences.theme"
+        static let exportFormat = "preferences.exportFormat"
+        static let exportQuality = "preferences.exportQuality"
     }
 
     private let defaults: UserDefaults
@@ -36,11 +38,24 @@ nonisolated struct UserDefaultsPreferencesStore: PreferencesStoring, @unchecked 
             preferences.theme = theme
         }
 
+        if let raw = defaults.string(forKey: Key.exportFormat),
+           let format = ExportFormat(rawValue: raw) {
+            preferences.exportFormat = format
+        }
+
+        // A real `NSNumber` rather than `double(forKey:)`: a corrupt string
+        // would otherwise read as zero and be accepted as a quality nobody chose.
+        if let number = defaults.object(forKey: Key.exportQuality) as? NSNumber {
+            preferences.exportQuality = number.doubleValue.clamped(to: ExportOptions.qualityRange)
+        }
+
         return preferences
     }
 
     func save(_ preferences: AppPreferences) {
         defaults.set(preferences.language.rawValue, forKey: Key.language)
         defaults.set(preferences.theme.rawValue, forKey: Key.theme)
+        defaults.set(preferences.exportFormat.rawValue, forKey: Key.exportFormat)
+        defaults.set(preferences.exportQuality, forKey: Key.exportQuality)
     }
 }

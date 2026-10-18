@@ -92,6 +92,12 @@ final class EditorViewModel {
     /// shows icons only.
     private(set) var openTool: Tool?
 
+    /// The export sheet, while one is open for this window.
+    ///
+    /// Held here rather than in the view so the File menu and the toolbar can
+    /// open the same sheet for the focused window.
+    private(set) var exportSession: ExportViewModel?
+
     var isSidebarVisible = true
 
     /// How wide the tool panel is, in points, for this window only.
@@ -126,6 +132,7 @@ final class EditorViewModel {
     private let logger = Logger(subsystem: "com.quadra.Photon", category: "EditorViewModel")
     private let libraryLoader: PhotoLibraryLoading
     private let renderer: PhotoEditing
+    private let exporter: PhotoExporting
 
     /// The folder currently loaded, so ``retry()`` knows what to re-scan.
     @ObservationIgnored private var folder: AuthorizedFolder?
@@ -143,9 +150,10 @@ final class EditorViewModel {
     /// nobody has touched has nothing to record anyway.
     @ObservationIgnored private var sessions: [URL: PhotoEditSession] = [:]
 
-    init(library: PhotoLibraryLoading, renderer: PhotoEditing) {
+    init(library: PhotoLibraryLoading, renderer: PhotoEditing, exporter: PhotoExporting) {
         self.libraryLoader = library
         self.renderer = renderer
+        self.exporter = exporter
     }
 
     // MARK: - Loading a folder
@@ -847,6 +855,55 @@ final class EditorViewModel {
         guard let session = currentSession, session.canRedo else { return }
         session.redo()
         historyDidMove()
+    }
+
+    // MARK: - Export
+
+    /// Whether the focused window has a picture that can be exported.
+    ///
+    /// A photo is exportable once the canvas has it: that is when its own size
+    /// is known, so the sheet can show dimensions and a crop can be measured
+    /// against the real frame. While it loads there is nothing honest to show.
+    var canExport: Bool {
+        selection != nil && renderedPhoto != nil && exportSession == nil
+    }
+
+    /// Opens the export sheet for the selected photo.
+    ///
+    /// The snapshot is the last *committed* recipe. A crop the user is still
+    /// adjusting is deliberately not included; the sheet warns that the export
+    /// is the last applied crop rather than silently exporting a draft.
+    func presentExport(preferences: AppViewModel) {
+        guard exportSession == nil, canExport,
+              let item = selection,
+              let sourceSize = decoded?.sourceSize else { return }
+
+        let recipe = currentSession?.history.current ?? .identity
+        let hasUnappliedCrop = cropDraftChangesPicture(against: recipe)
+
+        exportSession = ExportViewModel(
+            photo: item,
+            recipe: recipe,
+            sourceSize: sourceSize,
+            hasUnappliedCrop: hasUnappliedCrop,
+            exporter: exporter,
+            preferences: preferences
+        )
+    }
+
+    /// Closes the export sheet, cancelling a write that is still going.
+    func dismissExport() {
+        exportSession?.close()
+        exportSession = nil
+    }
+
+    /// Whether the crop tool's draft asks for a different picture than `recipe`.
+    ///
+    /// Only the rect and the turn decide the picture; changing the aspect a crop
+    /// is held to without moving it is not an edit the export would miss.
+    private func cropDraftChangesPicture(against recipe: EditRecipe) -> Bool {
+        guard isCropping, let draft = draftCrop else { return false }
+        return !CropTool.commit(draft, into: recipe).rendersTheSame(as: recipe)
     }
 
     // MARK: - Window

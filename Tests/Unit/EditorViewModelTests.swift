@@ -1473,6 +1473,73 @@ struct EditorViewModelTests {
         #expect(renderer.renderedRecipes.last?.crop.isIdentity == false, "Turned but not cropped")
     }
 
+    // MARK: - Export
+
+    @Test("An editor with no photo cannot export")
+    func nothingToExport() {
+        let editor = makeEditor()
+
+        #expect(!editor.canExport)
+
+        editor.presentExport(preferences: makeAppViewModel())
+
+        #expect(editor.exportSession == nil)
+    }
+
+    @Test("A photo that is on the canvas can export")
+    func canExportTheCanvasPhoto() async {
+        let editor = makeEditor()
+        await editor.load(.fixture())
+        await editor.select(.fixture())
+
+        #expect(editor.canExport)
+    }
+
+    @Test("Export uses the committed recipe while a crop draft is open")
+    func exportUsesCommittedCrop() async throws {
+        let editor = await editorWithCropOpen()
+        editor.resizeCrop(moving: .right, to: CGPoint(x: 0.5, y: 0))
+        await editor.waitForCanvas()
+
+        editor.presentExport(preferences: makeAppViewModel())
+        let session = try #require(editor.exportSession)
+
+        #expect(session.photo == .fixture())
+        #expect(session.recipe == .identity, "The unvalidated crop is not part of the export")
+        #expect(session.hasUnappliedCrop)
+        #expect(session.folder.path == "/tmp/Photos")
+    }
+
+    @Test("Export uses a committed crop once it has been confirmed")
+    func exportUsesCommittedCropAfterCommit() async throws {
+        let editor = await editorWithCropOpen()
+        editor.resizeCrop(moving: .right, to: CGPoint(x: 0.5, y: 0))
+        await editor.waitForCanvas()
+        editor.commitCropSession()
+        await editor.waitForCanvas()
+
+        editor.presentExport(preferences: makeAppViewModel())
+        let session = try #require(editor.exportSession)
+
+        #expect(!session.hasUnappliedCrop)
+        #expect(!session.recipe.crop.isIdentity, "The confirmed crop is what gets exported")
+    }
+
+    @Test("Dismissing the export sheet makes the editor exportable again")
+    func dismissExport() async {
+        let editor = makeEditor()
+        await editor.load(.fixture())
+        await editor.select(.fixture())
+        editor.presentExport(preferences: makeAppViewModel())
+
+        #expect(editor.exportSession != nil)
+
+        editor.dismissExport()
+
+        #expect(editor.exportSession == nil)
+        #expect(editor.canExport)
+    }
+
     // MARK: - Helpers
 
     /// An editor with a photo selected and the crop tool open on it.
@@ -1501,9 +1568,10 @@ struct EditorViewModelTests {
 
     private func makeEditor(
         library: StubPhotoLibrary = StubPhotoLibrary(),
-        renderer: StubPhotoEditor = StubPhotoEditor()
+        renderer: StubPhotoEditor = StubPhotoEditor(),
+        exporter: StubPhotoExporter = StubPhotoExporter()
     ) -> EditorViewModel {
-        EditorViewModel(library: library, renderer: renderer)
+        EditorViewModel(library: library, renderer: renderer, exporter: exporter)
     }
 
     /// The folder a node is, or nil when it is a photo.

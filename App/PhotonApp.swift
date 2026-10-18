@@ -48,6 +48,7 @@ struct PhotonApp: App {
         .commands {
             FolderCommands()
             EditorCommands()
+            ExportCommands()
         }
     }
 }
@@ -68,6 +69,28 @@ struct FolderCommands: Commands {
             Button("command.openFolder") { folder?.chooseFolder() }
                 .keyboardShortcut("o")
                 .disabled(folder == nil)
+        }
+    }
+}
+
+/// Export for the photo in the focused window.
+///
+/// In the File menu rather than the application menu: it acts on a document,
+/// and it reads both the window's editor and the app's remembered export
+/// defaults through `FocusedValue`, so it can never act on another window's
+/// photo.
+struct ExportCommands: Commands {
+    @FocusedValue(EditorViewModel.self) private var editor: EditorViewModel?
+    @FocusedValue(AppViewModel.self) private var app: AppViewModel?
+
+    var body: some Commands {
+        CommandGroup(after: .importExport) {
+            Button("command.export") {
+                guard let editor, let app else { return }
+                editor.presentExport(preferences: app)
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(editor?.canExport != true || app == nil)
         }
     }
 }

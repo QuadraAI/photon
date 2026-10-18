@@ -168,7 +168,12 @@ private func previewScreen(
 }
 
 private func previewEditor(_ app: AppViewModel) -> EditorViewModel {
-    EditorViewModel(library: PreviewPhotoLibrary(), renderer: PreviewPhotoEditor())
+    let engine = PreviewPhotoEditor()
+    return EditorViewModel(
+        library: PreviewPhotoLibrary(),
+        renderer: engine,
+        exporter: PhotoExporter(renderer: engine)
+    )
 }
 
 private extension View {
@@ -329,5 +334,30 @@ private extension View {
     previewScreen(EditorView(folder: previewFolder), app: .preview(AppPreferences(language: .english)))
         .previewEditorFramed()
         .environment(\.dynamicTypeSize, .accessibility3)
+}
+
+/// The export sheet, wired the way the editor wires it: preview preferences,
+/// a real exporter over the preview engine, and a snapshot of one pretend photo.
+#Preview("Export — sheet") {
+    let app = AppViewModel.preview(AppPreferences(language: .english))
+    let engine = PreviewPhotoEditor()
+    let photo = PhotoItem(
+        url: URL(filePath: "/Users/Shared/Holiday Photos/IMG_0001.heic"),
+        subfolderPath: "",
+        isRAW: false
+    )
+    let model = ExportViewModel(
+        photo: photo,
+        recipe: .identity,
+        sourceSize: CGSize(width: 4000, height: 3000),
+        hasUnappliedCrop: false,
+        exporter: PhotoExporter(renderer: engine),
+        preferences: app
+    )
+
+    return ExportSheet(model: model)
+        .environment(app)
+        .appPresentation(app.preferences)
+        .frame(width: 520, height: 620)
 }
 #endif

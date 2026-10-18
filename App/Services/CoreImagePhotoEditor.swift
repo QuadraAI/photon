@@ -155,8 +155,14 @@ actor CoreImagePhotoEditor: PhotoEditing {
         guard !Task.isCancelled else { throw .unreadable }
 
         let sourceSize = try uprightSize(of: url)
-        let limit = maxPixelSize ?? Int(max(sourceSize.width, sourceSize.height))
-        let decoded = try decoded(url, maxPixelSize: limit)
+        let sourceLimit = Int(max(sourceSize.width, sourceSize.height))
+        let limit = maxPixelSize ?? sourceLimit
+        // A stand-in is the file's preview, which is cheaper than the picture
+        // but smaller. It is the right answer for a canvas and the wrong one for
+        // an export: "full resolution" means the picture, not the preview the
+        // camera happened to carry.
+        let allowsStandIn = Self.allowsStandIn(requestedMaxPixelSize: maxPixelSize, sourceLimit: sourceLimit)
+        let decoded = try decoded(url, maxPixelSize: limit, allowsStandIn: allowsStandIn)
         let colorSpace = decoded.colorSpace ?? CGColorSpaceCreateDeviceRGB()
 
         let color = recipe.color
@@ -288,20 +294,37 @@ actor CoreImagePhotoEditor: PhotoEditing {
         return CropGeometry.uprightSize(CGSize(width: width, height: height), for: orientation)
     }
 
+    /// Whether a decode may use the file's own preview instead of its picture.
+    ///
+    /// Only a preview request can: a request for the photo at its own size (or
+    /// larger) is an export, and an export that quietly came back at the size of
+    /// a camera's embedded JPEG would not be the photo at full resolution.
+    nonisolated static func allowsStandIn(requestedMaxPixelSize: Int?, sourceLimit: Int) -> Bool {
+        guard let requestedMaxPixelSize else { return false }
+        return requestedMaxPixelSize < sourceLimit
+    }
+
     /// A display-sized copy of the photo, upright and with no recipe applied.
     ///
     /// For a camera file the draft *is* the picture — its preview is a full-size
     /// JPEG, and decoding the raw instead would cost thirty times as much to
-    /// arrive at something the canvas cannot tell apart.
-    private func decoded(_ url: URL, maxPixelSize: Int) throws(PhotoRenderError) -> CGImage {
-        if let lastDraft,
+    /// arrive at something the canvas cannot tell apart. An export passes
+    /// `allowsStandIn: false` and gets the picture itself.
+    private func decoded(
+        _ url: URL,
+        maxPixelSize: Int,
+        allowsStandIn: Bool
+    ) throws(PhotoRenderError) -> CGImage {
+        if allowsStandIn,
+           let lastDraft,
            lastDraft.url == url,
            lastDraft.maxPixelSize == maxPixelSize,
            isDisplaySized(lastDraft.image, for: maxPixelSize) {
             return lastDraft.image
         }
 
-        if let embedded = try? thumbnail(for: url, maxPixelSize: maxPixelSize, from: .embedded),
+        if allowsStandIn,
+           let embedded = try? thumbnail(for: url, maxPixelSize: maxPixelSize, from: .embedded),
            isDisplaySized(embedded, for: maxPixelSize) {
             return embedded
         }

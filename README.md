@@ -15,6 +15,9 @@ device: no account, no cloud.
 - Color adjustments: saturation, vibrance, cast, and per-color HSL
 - Crop with aspect ratios and rotation
 - Per-photo undo and redo
+- Export to JPEG, HEIC, AVIF, PNG, or TIFF at full resolution
+- Non-destructive exports: metadata preserved, GPS optional, collisions
+  renamed, and originals never touched
 - RAW support through Core Image
 - GPU-backed previews
 
@@ -22,11 +25,10 @@ device: no account, no cloud.
 
 Photon is in early development. Everything related to photo editing, including
 the tools, layout, and workflow, is subject to change. Light and Presets are
-placeholders, edits are currently in-memory, and export is not available yet.
+placeholders, and edits are currently in-memory.
 
-Export is next, followed by film-emulation filters that can be created,
-imported, and applied. Both are still being designed, and the details may
-change.
+Film-emulation filters that can be created, imported, and applied are next; they
+are still being designed, and the details may change.
 
 ## Requirements
 

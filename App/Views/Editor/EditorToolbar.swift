@@ -15,6 +15,7 @@ import SwiftUI
 /// because the lights stay pinned to the strip they were born in.
 struct EditorToolbar: ToolbarContent {
     @Environment(EditorViewModel.self) private var editor
+    @Environment(AppViewModel.self) private var app
 
     /// Shown when nothing is selected, so the bar is never blank.
     let folderName: String
@@ -60,6 +61,25 @@ struct EditorToolbar: ToolbarContent {
             // the touch target.
             SettingsMenu()
                 .font(.title2)
+        }
+
+        // Leading on macOS because a trailing item sits on the tool rail, and
+        // primary on iPad because that is the touch-reachable side there.
+        ToolbarItem(placement: exportPlacement) {
+            Button {
+                editor.presentExport(preferences: app)
+            } label: {
+                Label("command.export", systemImage: "square.and.arrow.up")
+                    .labelStyle(.iconOnly)
+                    // The share glyph fills more of its box than the undo
+                    // arrows and the ellipsis do, so at the same nominal size it
+                    // reads larger than the controls beside it.
+                    .font(.body)
+            }
+            .disabled(!editor.canExport)
+            .help(Text("command.export"))
+            .accessibilityLabel("command.export")
+            .accessibilityIdentifier("editor.toolbar.export")
         }
 
         ToolbarItem(placement: .principal) {
@@ -121,6 +141,20 @@ struct EditorToolbar: ToolbarContent {
         .help(undoTitle)
         .accessibilityLabel(undoTitle)
         .accessibilityIdentifier("editor.toolbar.undo")
+    }
+
+    /// Where the export button lives on the bar.
+    ///
+    /// macOS puts it with the other leading controls: a trailing item tracked
+    /// the tool rail and landed on it, which is why the settings menu moved to
+    /// the leading edge too. iPad has no tool rail in the toolbar, so its
+    /// natural trailing primary-action slot is the one a finger reaches.
+    private var exportPlacement: ToolbarItemPlacement {
+        #if os(macOS)
+        .navigation
+        #else
+        .primaryAction
+        #endif
     }
 
     private var redoButton: some View {

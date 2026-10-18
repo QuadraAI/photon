@@ -243,6 +243,14 @@ struct CoreImagePhotoEditorTests {
         }
     }
 
+    @Test("A stand-in is for a preview; an export decodes the picture")
+    func standInsAreForPreviews() {
+        #expect(!CoreImagePhotoEditor.allowsStandIn(requestedMaxPixelSize: nil, sourceLimit: 6000))
+        #expect(CoreImagePhotoEditor.allowsStandIn(requestedMaxPixelSize: 2048, sourceLimit: 6000))
+        #expect(!CoreImagePhotoEditor.allowsStandIn(requestedMaxPixelSize: 6000, sourceLimit: 6000))
+        #expect(!CoreImagePhotoEditor.allowsStandIn(requestedMaxPixelSize: 8000, sourceLimit: 6000))
+    }
+
     // MARK: - Formats
 
     @Test("A TIFF decodes, reports its size, and crops like any other photo")

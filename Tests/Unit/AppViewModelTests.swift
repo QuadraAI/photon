@@ -44,6 +44,30 @@ struct AppViewModelTests {
         #expect(store.stored.theme == .dark)
     }
 
+    @Test("Changing the export defaults persists them immediately")
+    func persistsExportDefaults() {
+        let store = InMemoryPreferencesStore()
+        let app = makeAppViewModel(preferences: store)
+
+        app.setExportDefaults(format: .png, quality: 0.55)
+
+        #expect(app.preferences.exportFormat == .png)
+        #expect(app.preferences.exportQuality == 0.55)
+        #expect(store.stored.exportFormat == .png)
+        #expect(store.stored.exportQuality == 0.55)
+    }
+
+    @Test("An out-of-range export quality is clamped before it is stored")
+    func clampsExportQuality() {
+        let store = InMemoryPreferencesStore()
+        let app = makeAppViewModel(preferences: store)
+
+        app.setExportDefaults(format: .jpeg, quality: 2)
+
+        #expect(app.preferences.exportQuality == 1)
+        #expect(store.stored.exportQuality == 1)
+    }
+
     @Test("Setting a value to what it already is does not touch the store")
     func skipsRedundantWrites() {
         let store = InMemoryPreferencesStore()
@@ -51,6 +75,7 @@ struct AppViewModelTests {
 
         app.setLanguage(.system)
         app.setTheme(.system)
+        app.setExportDefaults(format: .jpeg, quality: ExportOptions.defaultQuality)
 
         #expect(store.saves == 0)
     }

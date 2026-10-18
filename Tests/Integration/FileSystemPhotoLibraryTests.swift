@@ -207,7 +207,11 @@ struct FileSystemPhotoLibraryTests {
         #expect(try await library.photos(in: tree.root).count == 5_000)
         let scan = scanStart.duration(to: clock.now)
 
-        let editor = EditorViewModel(library: library, renderer: StubPhotoEditor())
+        let editor = EditorViewModel(
+            library: library,
+            renderer: StubPhotoEditor(),
+            exporter: StubPhotoExporter()
+        )
         await editor.load(AuthorizedFolder(url: tree.root, bookmark: nil))
         let filterStart = clock.now
         editor.filter = "IMG_10"

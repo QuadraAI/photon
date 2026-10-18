@@ -50,6 +50,18 @@ final class AppViewModel {
         update { $0.theme = theme }
     }
 
+    /// Remembers what the next export should start from.
+    ///
+    /// Called when an export starts and when the sheet closes, rather than on
+    /// every slider tick: the value only has to survive to the next export, and
+    /// writing the defaults on every frame of a drag would be work nobody sees.
+    func setExportDefaults(format: ExportFormat, quality: Double) {
+        update {
+            $0.exportFormat = format
+            $0.exportQuality = quality.clamped(to: ExportOptions.qualityRange)
+        }
+    }
+
     // MARK: - Folders
 
     /// Whether this launch still has a remembered folder to resolve.

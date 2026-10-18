@@ -24,7 +24,8 @@ struct RootView: View {
         _editor = State(
             initialValue: EditorViewModel(
                 library: FileSystemPhotoLibrary(),
-                renderer: engine
+                renderer: engine,
+                exporter: PhotoExporter(renderer: engine)
             )
         )
     }
@@ -38,6 +39,9 @@ struct RootView: View {
             // Lets the menu bar act on *this* window's folder and editor.
             .focusedSceneValue(folder)
             .focusedSceneValue(editor)
+            // The export command needs the app's remembered format and quality
+            // as well as the focused window's photo.
+            .focusedSceneValue(app)
             .fileImporter(
                 isPresented: $folder.isChoosingFolder,
                 allowedContentTypes: [.folder],

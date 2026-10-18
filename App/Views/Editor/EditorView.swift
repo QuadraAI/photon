@@ -68,6 +68,9 @@ struct EditorView: View {
         .task(id: folder.url) {
             await editor.load(folder)
         }
+        .sheet(item: exportSheet) { model in
+            ExportSheet(model: model)
+        }
     }
 
     /// The view model owns sidebar visibility, so the column reports to it rather
@@ -76,6 +79,19 @@ struct EditorView: View {
         Binding(
             get: { editor.isSidebarVisible ? .all : .detailOnly },
             set: { editor.isSidebarVisible = $0 != .detailOnly }
+        )
+    }
+
+    /// The export sheet's item binding.
+    ///
+    /// SwiftUI dismisses an item sheet by writing `nil`; that is the signal to
+    /// close the export, cancel anything in flight and release the snapshot.
+    private var exportSheet: Binding<ExportViewModel?> {
+        Binding(
+            get: { editor.exportSession },
+            set: { model in
+                if model == nil { editor.dismissExport() }
+            }
         )
     }
 

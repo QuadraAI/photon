@@ -16,6 +16,8 @@ struct AppPreferencesTests {
 
         #expect(preferences.language == .system)
         #expect(preferences.theme == .system)
+        #expect(preferences.exportFormat == .jpeg)
+        #expect(preferences.exportQuality == ExportOptions.defaultQuality)
     }
 
     @Test("A fresh store reports the defaults")
@@ -28,11 +30,25 @@ struct AppPreferencesTests {
     @Test("Every setting survives a save and load round trip")
     func roundTrip() {
         let store = UserDefaultsPreferencesStore(defaults: .isolated())
-        let written = AppPreferences(language: .french, theme: .dark)
+        let written = AppPreferences(
+            language: .french,
+            theme: .dark,
+            exportFormat: .png,
+            exportQuality: 0.6
+        )
 
         store.save(written)
 
         #expect(store.load() == written)
+    }
+
+    @Test("An out-of-range stored export quality is clamped")
+    func exportQualityIsClamped() {
+        let store = UserDefaultsPreferencesStore(defaults: .isolated())
+
+        store.save(AppPreferences(exportQuality: 2))
+
+        #expect(store.load().exportQuality == 1)
     }
 
     @Test("A key the user never set keeps the default rather than collapsing")
@@ -44,6 +60,8 @@ struct AppPreferencesTests {
         // The theme was never chosen, so it must stay on `.system` instead of
         // being written back as some arbitrary concrete value.
         #expect(store.load().theme == .system)
+        #expect(store.load().exportFormat == .jpeg)
+        #expect(store.load().exportQuality == ExportOptions.defaultQuality)
     }
 
     @Test("Unreadable stored values fall back to the defaults instead of crashing")
@@ -60,6 +78,7 @@ struct AppPreferencesTests {
         }
 
         #expect(store.load() == AppPreferences())
+        #expect(store.load().exportQuality == ExportOptions.defaultQuality, "A corrupt number is not read as zero")
     }
 }
 
