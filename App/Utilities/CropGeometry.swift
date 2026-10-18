@@ -356,6 +356,16 @@ nonisolated enum CropGeometry {
         )
     }
 
+    /// `rect` moved sideways by `offset`, but no further than its fit allows.
+    ///
+    /// A picture that already fills the width has no slack and stays put.
+    static func shifted(_ rect: CGRect, by offset: CGFloat, in container: CGSize) -> CGRect {
+        guard !rect.isEmpty else { return rect }
+
+        let slack = max(min(rect.minX, container.width - rect.maxX), 0)
+        return rect.offsetBy(dx: offset.clamped(to: -slack...slack), dy: 0)
+    }
+
     // MARK: - Internals
 
     /// `size`, centred on `container`.

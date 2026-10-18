@@ -92,6 +92,9 @@ struct EditorToolbar: ToolbarContent {
             .font(.headline)
             .lineLimit(1)
             .truncationMode(.middle)
+            // Before the fixed frame, so the name truncates inside the inset
+            // instead of widening the capsule.
+            .padding(.horizontal, AppLayout.toolbarTitleInset)
             .frame(width: AppLayout.toolbarTitleWidth)
             .frame(minHeight: AppLayout.toolbarTitleHeight)
             .glassEffect(.regular, in: .capsule)

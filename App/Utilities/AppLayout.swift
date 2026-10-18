@@ -54,12 +54,23 @@ enum AppLayout {
     static let sidebarToggleWidth: CGFloat = 40
     static let sidebarCountTrailingInset: CGFloat = 2
 
+    /// The space the editor's split view and its panes are measured in.
+    ///
+    /// Shared so the canvas can read its own place in it while it lays out.
+    static let splitViewSpace = "photon.editor.splitView"
+
     /// Size of the glass capsule around the editor's title, matching the camera
     /// housing on a 14" or 16" MacBook Pro — the width and height of that notch,
     /// so the capsule reads as the same piece of hardware rather than a label
     /// that happens to be centred.
     static let toolbarTitleWidth: CGFloat = 200
     static let toolbarTitleHeight: CGFloat = 32
+
+    /// Breathing room between the title and the capsule's rounded ends.
+    ///
+    /// The name is truncated to the width left inside it, so a long one stops
+    /// short of the capsule's edge instead of running into the curve.
+    static let toolbarTitleInset: CGFloat = 12
 
     /// Strip the preview canvas draws its own window chrome in.
     ///

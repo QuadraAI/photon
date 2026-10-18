@@ -397,6 +397,23 @@ struct CropGeometryTests {
         #expect(CropGeometry.fittedRect(imageSize: landscape, in: .zero) == .zero)
         #expect(CropGeometry.fittedRect(imageSize: .zero, in: CGSize(width: 10, height: 10)) == .zero)
     }
+
+    @Test("A picture moves onto the window's centre line only as far as it fits")
+    func shiftingToTheWindowCentre() {
+        let container = CGSize(width: 200, height: 200)
+        let tall = CropGeometry.fittedRect(imageSize: CGSize(width: 100, height: 200), in: container)
+        #expect(tall == CGRect(x: 50, y: 0, width: 100, height: 200))
+
+        // With slack, the offset is taken in full…
+        #expect(CropGeometry.shifted(tall, by: 24, in: container) == CGRect(x: 74, y: 0, width: 100, height: 200))
+        // …and no further than the edge when it is not.
+        #expect(CropGeometry.shifted(tall, by: 200, in: container) == CGRect(x: 100, y: 0, width: 100, height: 200))
+        #expect(CropGeometry.shifted(tall, by: -200, in: container) == CGRect(x: 0, y: 0, width: 100, height: 200))
+
+        // A picture that already fills the width has nowhere to go.
+        let wide = CropGeometry.fittedRect(imageSize: CGSize(width: 400, height: 200), in: container)
+        #expect(CropGeometry.shifted(wide, by: 24, in: container) == wide)
+    }
 }
 
 /// Two rects within floating-point noise of each other.

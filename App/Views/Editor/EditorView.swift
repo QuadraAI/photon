@@ -27,28 +27,14 @@ struct EditorView: View {
     /// sidebar's divider. The title capsule pays half of it back.
     @State private var sidebarOffset: CGFloat = 0
 
-    /// The split view's own width, and where the canvas sits inside it.
+    /// The split view's width, which the window's centre line is half of.
     ///
-    /// Together they are the canvas's place in the window, which is what its
-    /// placeholders centre on. Read from the layout rather than worked out from
-    /// which panes are open, so they hold *while* a pane animates: a placeholder
-    /// offset by an arithmetic guess jumps when the guess changes, and then
-    /// drifts back as the pane catches up.
+    /// Measured rather than assumed, because the window opens maximised.
     @State private var windowWidth: CGFloat = 0
-    @State private var canvasMidX: CGFloat = 0
 
     /// Whether the canvas is the keyboard's focus, which is what lets the arrow
     /// keys move through the folder's photos.
     @FocusState private var isCanvasFocused: Bool
-
-    /// Space the detail column's leading edge is measured in. Named rather than
-    /// `.global` so the number is the sidebar's width alone, with no window
-    /// position folded into it.
-    ///
-    /// `nonisolated` because `onGeometryChange` reads it from a `@Sendable`
-    /// closure, which the target's main-actor-by-default isolation would
-    /// otherwise put out of reach.
-    private nonisolated static let splitViewSpace = "photon.editor.splitView"
 
     var body: some View {
         NavigationSplitView(columnVisibility: columnVisibility) {
@@ -61,12 +47,12 @@ struct EditorView: View {
         } detail: {
             workspace
                 .onGeometryChange(for: CGFloat.self) { proxy in
-                    proxy.frame(in: .named(Self.splitViewSpace)).minX
+                    proxy.frame(in: .named(AppLayout.splitViewSpace)).minX
                 } action: { offset in
                     sidebarOffset = offset
                 }
         }
-        .coordinateSpace(.named(Self.splitViewSpace))
+        .coordinateSpace(.named(AppLayout.splitViewSpace))
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
             windowWidth = width
         }
@@ -99,12 +85,7 @@ struct EditorView: View {
         // content and left the sidebar's rows a blurred smear behind it. The
         // panes abut without one, and none of them needs the other's glass.
         HStack(spacing: 0) {
-            PhotoCanvas(windowCentreOffset: windowWidth / 2 - canvasMidX)
-                .onGeometryChange(for: CGFloat.self) { proxy in
-                    proxy.frame(in: .named(Self.splitViewSpace)).midX
-                } action: { midX in
-                    canvasMidX = midX
-                }
+            PhotoCanvas(windowWidth: windowWidth)
                 // The canvas is where the photo is looked at, so the bare
                 // arrows act on it. The sidebar's list answers the same keys
                 // itself, and the filter field keeps them for its text.
