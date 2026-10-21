@@ -25,7 +25,7 @@ device: no account, no cloud.
 
 Photon is in early development. Everything related to photo editing, including
 the tools, layout, and workflow, is subject to change. Light and Presets are
-placeholders, and edits are currently in-memory.
+placeholder placeholders for future Implementations.
 
 Film-emulation filters that can be created, imported, and applied are next; they
 are still being designed, and the details may change.
